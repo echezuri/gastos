@@ -1,0 +1,20 @@
+{
+  "name": "gastos",
+  "version": "1.0.0",
+  "description": "App local de finanzas personales con la misma estructura del sheet (ingresos, AFIP, gastos fijos, tarjetas, gastos variables, auto y quinta)",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-warnings=ExperimentalWarning server.js",
+    "import": "node --no-warnings=ExperimentalWarning tools/import-sheet.js",
+    "backup": "node --no-warnings=ExperimentalWarning tools/backup.js",
+    "build:sheets": "node tools/build-apps-script.js",
+    "build:pwa": "node tools/build-pwa.js",
+    "export:sheets": "node --no-warnings=ExperimentalWarning tools/exportar-a-sheets.js",
+    "datos:sheets": "node --no-warnings=ExperimentalWarning tools/generar-datos-gs.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

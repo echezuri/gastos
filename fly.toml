@@ -1,0 +1,27 @@
+# Configuración para Fly.io. Cambiá "app" por el nombre que elijas al crear la aplicación.
+app = "gastos"
+primary_region = "eze"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  NODE_ENV = "production"
+  GASTOS_DB = "/data/gastos.db"
+  PORT = "8080"
+
+# La base de datos vive acá y no se borra en los deploys
+[mounts]
+  source = "datos"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "suspend"
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

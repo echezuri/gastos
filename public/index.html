@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="es-AR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Gastos</title>
+    <!-- rutas relativas: la app puede vivir en una subcarpeta, como en GitHub Pages -->
+    <link rel="manifest" href="manifest.webmanifest" />
+    <meta name="theme-color" content="#1f6f5c" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Gastos" />
+    <link rel="apple-touch-icon" href="iconos/icono-192.png" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💸</text></svg>" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-row">
+      <div class="brand">
+        <span class="brand-mark">$</span>
+        <h1>Gastos</h1>
+      </div>
+
+      <nav class="tabs" id="tabs">
+        <button class="tab is-active" data-view="anio">Año</button>
+        <button class="tab" data-view="auto">Auto</button>
+        <button class="tab" data-view="quinta">Quinta</button>
+      </nav>
+
+      <div class="topbar-right">
+        <button class="btn btn-accent" id="add-movement" title="Cargar un gasto o un ingreso (tecla n)">+ Cargar</button>
+        <label class="year-picker">
+          <span class="sr-only">Año</span>
+          <select id="year-select"></select>
+        </label>
+        <button class="btn btn-ghost" id="new-year" title="Crear el año siguiente copiando las categorías">+ año</button>
+        <a class="btn btn-ghost" href="/api/backup" download>Backup</a>
+      </div>
+      </div>
+      <nav class="subtabs" id="subtabs"></nav>
+    </header>
+
+    <main id="app">
+      <p class="loading">Cargando…</p>
+    </main>
+
+    <div class="toast" id="toast" hidden></div>
+
+    <!-- PWA:SCRIPTS -->
+    <script src="charts.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

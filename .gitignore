@@ -1,0 +1,12 @@
+node_modules/
+
+# --- TUS DATOS: nada de esto puede ir al repositorio ---
+# El repositorio va a ser público (GitHub Pages gratis lo exige), así que acá sólo
+# viaja el código. Tus movimientos viven en el Google Sheet y en tu PC.
+data/
+sheet-export/
+apps-script/Datos.gs
+tools/source/
+
+# Carpeta vieja de la PWA, antes de que se llamara docs/
+pwa/
