@@ -2,15 +2,14 @@ Reglas de seguridad de Firestore.
 
 Dónde: consola de Firebase → Firestore Database → pestaña "Rules" → pegar → Publish.
 
-Antes de pegar, reemplazá TU-USUARIO por tu identificador. Lo consiguen así:
-  · Authentication → Users → columna "User UID", o
-  · lo imprime tools/migrar-a-firebase.js al entrar
-
 Por qué está atado a un usuario y no a "cualquiera que haya entrado": la clave de la app
 viaja en el código y el repositorio es público. Esa clave identifica al proyecto, no da
 permisos — pero si la regla dijera "con que haya sesión alcanza", cualquiera que se
 registrara podría leer tus finanzas. Atada al usuario, no depende de que los registros
 estén cerrados.
+
+El identificador de abajo sale de Authentication → Users → columna "User UID". No es un
+secreto: sin la clave de esa cuenta no sirve para nada.
 
 ---------------------------------------------------------------------------------------
 
@@ -22,7 +21,7 @@ service cloud.firestore {
     // Todo lo de esta app es de un solo dueño.
     match /{coleccion}/{documento} {
       allow read, write: if request.auth != null
-                         && request.auth.uid == 'TU-USUARIO'
+                         && request.auth.uid == 'GMHhBjcOYLZ8WCGxoOZHJRuSXXD3'
                          && coleccion in [
                               'categorias', 'celdas', 'movimientos', 'subcategorias',
                               'autos', 'auto_services', 'auto_plan',
