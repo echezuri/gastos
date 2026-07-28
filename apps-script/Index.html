@@ -2196,13 +2196,13 @@ const almacen = {
 };
 
 /** Cualquier falla se muestra en pantalla: quedarse en "Cargando…" no dice nada. */
-function mostrarFalla(mensaje, detalle) {
+function mostrarFalla(mensaje, detalle, titulo = 'No pude cargar los datos') {
   const app = document.getElementById('app');
   if (!app) return;
   const texto = String(mensaje === null || mensaje === undefined ? '' : mensaje).trim();
   app.replaceChildren(
     el('div', { class: 'falla' }, [
-      el('h2', { text: 'No pude cargar los datos' }),
+      el('h2', { text: titulo }),
       el('p', { text: texto || 'Error desconocido (mirá la consola del navegador)' }),
       detalle ? el('pre', { text: String(detalle).slice(0, 600) }) : null,
     ])
@@ -3423,6 +3423,26 @@ async function submitForm(event, keepOpen) {
 
 const sincro = { corriendo: false, pedidaDeNuevo: false, estado: 'listo', detalle: '' };
 
+/** Traduce los errores de permiso de Google a algo que diga qué hacer. */
+function mensajeDePermiso(mensaje) {
+  if (/access_denied|no ha completado|verificaci/i.test(mensaje)) {
+    return (
+      'Google bloqueó el acceso porque tu cuenta no figura como usuario de prueba. ' +
+      'Entrá a console.cloud.google.com → Pantalla de consentimiento de OAuth → Usuarios de prueba, ' +
+      'agregá tu cuenta y volvé a tocar Conectar.'
+    );
+  }
+  if (/origin|redirect_uri/i.test(mensaje)) {
+    return (
+      'Google rechazó la dirección desde la que estás entrando. En la credencial, ' +
+      'Orígenes autorizados de JavaScript tiene que incluir exactamente ' +
+      location.origin
+    );
+  }
+  if (/cliente|client/i.test(mensaje)) return 'Revisá el ID de cliente en el engranaje ⚙.';
+  return 'Tocá acá para conectar con tu cuenta de Google';
+}
+
 function pintarSincro() {
   if (MODO !== 'pwa') return;
   let chip = document.getElementById('sincro');
@@ -3497,9 +3517,7 @@ async function sincronizarConSheet({ forzar = false, bajar = false } = {}) {
     // si lo pedís vos tocando algo: por eso el chip pasa a decir "Conectar".
     const necesitaPermiso = /popup|consent|access_denied|interaction|permiso|token|entrar|cliente|librería/i.test(err.message);
     sincro.estado = necesitaPermiso ? 'sin-permiso' : 'error';
-    sincro.detalle = necesitaPermiso
-      ? 'Tocá acá para conectar con tu cuenta de Google'
-      : err.message;
+    sincro.detalle = necesitaPermiso ? mensajeDePermiso(err.message) : err.message;
   } finally {
     sincro.corriendo = false;
     pintarSincro();
@@ -3526,6 +3544,31 @@ async function refrescarDesdeLocal() {
 
 // ---------------------------------------------------------------- configuración de la planilla
 
+/**
+ * Link que lleva la configuración adentro, para no tener que copiar los IDs a mano en
+ * cada dispositivo. Se abre una vez en el teléfono y queda configurado.
+ */
+function linkParaOtroDispositivo() {
+  const { spreadsheetId, clientId } = sheetsApi.config.leer();
+  const datos = btoa(JSON.stringify({ s: spreadsheetId, c: clientId }));
+  return `${location.origin}${location.pathname}#config=${datos}`;
+}
+
+/** Si el link trae configuración, se guarda y se limpia la dirección. */
+function tomarConfiguracionDelLink() {
+  const marca = '#config=';
+  if (!location.hash.startsWith(marca)) return false;
+  try {
+    const { s, c } = JSON.parse(atob(location.hash.slice(marca.length)));
+    if (!s || !c) return false;
+    sheetsApi.config.escribir({ spreadsheetId: s, clientId: c });
+    history.replaceState(null, '', location.pathname + location.search);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function mostrarConfiguracion({ obligatoria = false } = {}) {
   const actual = sheetsApi.config.leer();
   const idPlanilla = el('input', { class: 'field-input', type: 'text', value: actual.spreadsheetId, placeholder: '1iaAWee…' });
@@ -3544,12 +3587,42 @@ function mostrarConfiguracion({ obligatoria = false } = {}) {
     sheetsApi.config.escribir(valores);
     document.getElementById('config')?.remove();
     await sincronizarConSheet({ forzar: true, bajar: true });
+
+    if (sincro.estado === 'sin-permiso' || sincro.estado === 'error') {
+      // El motivo real lo sabe la sincronización: mostrarlo tal cual, no uno inventado
+      mostrarFalla(
+        sincro.detalle,
+        '',
+        sincro.estado === 'sin-permiso' ? 'Google no dio el permiso' : 'No pude leer la planilla'
+      );
+      pintarSincro();
+      return;
+    }
     if (!almacenLocal.hayDatos()) {
-      mostrarFalla('No pude leer la planilla', 'Revisá que el ID sea el correcto y que la cuenta tenga acceso.');
+      mostrarFalla(
+        'La planilla no tiene las pestañas de la app',
+        'Revisá que el ID sea el de la planilla correcta. Las pestañas (Movimientos, Celdas, …) se crean al cargar los datos.'
+      );
     } else if (!state.data) {
       await arrancarInterfaz();
     }
   };
+
+  // Botón para llevar la configuración al teléfono sin copiar nada a mano
+  const avisoLink = el('small', { class: 'field-hint' });
+  const botonLink = el('button', {
+    class: 'btn btn-ghost login-btn',
+    text: '📱 Copiar link para otro dispositivo',
+    onclick: async () => {
+      const link = linkParaOtroDispositivo();
+      try {
+        await navigator.clipboard.writeText(link);
+        avisoLink.textContent = 'Copiado. Mandátelo al teléfono y abrilo: queda configurado solo.';
+      } catch {
+        avisoLink.textContent = link;
+      }
+    },
+  });
 
   const caja = el('div', { id: 'config', class: 'login' }, [
     el('div', { class: 'login-caja config-caja' }, [
@@ -3558,6 +3631,8 @@ function mostrarConfiguracion({ obligatoria = false } = {}) {
       el('label', { class: 'field' }, [el('span', { text: 'ID de la planilla' }), idPlanilla]),
       el('label', { class: 'field' }, [el('span', { text: 'ID de cliente de Google' }), idCliente]),
       el('button', { class: 'btn btn-accent login-btn', text: 'Guardar y conectar', onclick: guardar }),
+      sheetsApi.config.completa() ? botonLink : null,
+      sheetsApi.config.completa() ? avisoLink : null,
       obligatoria ? null : el('button', { class: 'btn btn-ghost login-btn', text: 'Cerrar', onclick: () => document.getElementById('config').remove() }),
       error,
     ]),
@@ -4351,6 +4426,8 @@ async function arrancarInterfaz() {
 
 async function arrancarPwa() {
   almacenLocal.instalar();
+  // Si entraste con el link que trae la configuración, ya queda todo puesto
+  tomarConfiguracionDelLink();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

@@ -101,28 +101,53 @@ function hoja(nombre) {
  * la llamada y se olvidan apenas se escribe algo.
  */
 let MEMORIA = {};
+let ENCABEZADOS = {};
 
 function olvidar(nombre) {
+  // El encabezado no cambia al escribir filas: sólo se olvida todo junto, al empezar
+  // otra llamada.
   if (nombre) delete MEMORIA[nombre];
-  else MEMORIA = {};
+  else {
+    MEMORIA = {};
+    ENCABEZADOS = {};
+  }
 }
 
 /** Devuelve las filas como objetos, más el número de fila real para poder editarlas. */
 function leer(nombre) {
   if (MEMORIA[nombre]) return MEMORIA[nombre];
   const valores = hoja(nombre).getDataRange().getValues();
+  const encabezados = (valores[0] || []).map(texto);
+  while (encabezados.length && encabezados[encabezados.length - 1] === '') encabezados.pop();
+  ENCABEZADOS[nombre] = encabezados;
   const filas = [];
-  if (valores.length >= 2) {
-    const encabezados = valores[0];
-    for (let i = 1; i < valores.length; i++) {
-      if (valores[i].every(function (v) { return v === '' || v === null; })) continue;
-      const obj = { _fila: i + 1 };
-      for (let c = 0; c < encabezados.length; c++) obj[encabezados[c]] = valores[i][c];
-      filas.push(obj);
-    }
+  for (let i = 1; i < valores.length; i++) {
+    if (valores[i].every(function (v) { return v === '' || v === null; })) continue;
+    const obj = { _fila: i + 1 };
+    for (let c = 0; c < encabezados.length; c++) obj[encabezados[c]] = valores[i][c];
+    filas.push(obj);
   }
   MEMORIA[nombre] = filas;
   return filas;
+}
+
+/**
+ * Los nombres de columna tal como están en la pestaña, no como los lista TABLAS.
+ *
+ * Las filas se leen por el encabezado del Sheet y se escriben por posición, así que si los
+ * dos no coinciden cada dato cae en la columna equivocada y se pierde sin avisar. Manda el
+ * encabezado real; las columnas que le falten se agregan al final una sola vez.
+ */
+function columnas(nombre) {
+  leer(nombre); // deja ENCABEZADOS[nombre] al día
+  const actuales = ENCABEZADOS[nombre];
+  const faltan = TABLAS[nombre].filter(function (c) { return actuales.indexOf(c) < 0; });
+  if (!faltan.length) return actuales;
+  const completas = actuales.concat(faltan);
+  hoja(nombre).getRange(1, 1, 1, completas.length).setValues([completas]);
+  ENCABEZADOS[nombre] = completas;
+  olvidar(nombre);
+  return completas;
 }
 
 function proximoId(nombre) {
@@ -133,7 +158,7 @@ function proximoId(nombre) {
 }
 
 function filaDe(nombre, datos, id) {
-  return TABLAS[nombre].map(function (col) {
+  return columnas(nombre).map(function (col) {
     return col === 'id' ? id : datos[col] === undefined || datos[col] === null ? '' : datos[col];
   });
 }
@@ -146,6 +171,7 @@ function insertar(nombre, datos) {
 function insertarVarios(nombre, lista) {
   if (!lista.length) return [];
   const h = hoja(nombre);
+  const cols = columnas(nombre); // antes de leer: puede completar el encabezado
   const filasActuales = leer(nombre);
   let id = proximoId(nombre);
   const ids = [];
@@ -156,22 +182,23 @@ function insertarVarios(nombre, lista) {
     return fila;
   });
   const desde = filasActuales.length ? filasActuales[filasActuales.length - 1]._fila + 1 : 2;
-  h.getRange(desde, 1, matriz.length, TABLAS[nombre].length).setValues(matriz);
+  h.getRange(desde, 1, matriz.length, cols.length).setValues(matriz);
   olvidar(nombre);
   return ids;
 }
 
 function actualizar(nombre, id, cambios) {
+  const cols = columnas(nombre); // antes de leer: puede completar el encabezado
   const filas = leer(nombre);
   const fila = filas.filter(function (f) { return Number(f.id) === Number(id); })[0];
   if (!fila) return false;
   const h = hoja(nombre);
   // Una sola escritura con la fila entera en vez de una por columna
-  const actualizada = TABLAS[nombre].map(function (col) {
+  const actualizada = cols.map(function (col) {
     const valor = cambios[col] !== undefined ? cambios[col] : fila[col];
     return col === 'id' ? Number(fila.id) : valor === null || valor === undefined ? '' : valor;
   });
-  h.getRange(fila._fila, 1, 1, TABLAS[nombre].length).setValues([actualizada]);
+  h.getRange(fila._fila, 1, 1, cols.length).setValues([actualizada]);
   olvidar(nombre);
   return true;
 }

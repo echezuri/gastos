@@ -274,5 +274,39 @@ const quedan = [2026, 2027].some((anio) =>
 );
 comprobar('limpieza de las pruebas', !quedan);
 
+// ---------------------------------------------------------------- encabezado desfasado
+
+// Un Sheet creado antes de que existieran las columnas de dólares tiene el encabezado
+// corto. Como las filas se leen por el encabezado real y se escriben por posición, sin
+// esto el importe caía en la columna de al lado: los gastos entraban en $0 y sin pagar,
+// y "Marcar pagado" moría con "Importe inválido".
+console.log('\nUna pestaña con el encabezado viejo se completa sola\n');
+
+const VIEJO = ['id', 'anio', 'mes', 'dia', 'tipo', 'seccion', 'categoria', 'subcategoria', 'descripcion', 'monto', 'pagado'];
+const planillaVieja = crearPlanilla({ Movimientos: [VIEJO] });
+const viejo = cargarCodigo(planillaVieja, ['Codigo.gs']);
+
+const alta = viejo.llamar('POST', '/api/movements', {
+  year: 2026, month: 7, day: 27, section: 'tarjetas', category: 'SANTANDER',
+  description: 'Calefactor', amount: 150000, paid: true, cuotas: 2, currency: 'ARS',
+});
+comprobar('carga sin error', !alta.error, alta.error);
+comprobar(
+  'el encabezado ahora tiene las columnas que faltaban',
+  ['moneda', 'monto_moneda', 'cotizacion'].every((c) => planillaVieja.datos.Movimientos[0].includes(c)),
+  JSON.stringify(planillaVieja.datos.Movimientos[0])
+);
+
+const guardado = viejo.llamar('GET', '/api/movements?year=2026&month=7').movements[0];
+comprobar('el importe no se pierde', guardado && guardado.amount === 150000, guardado && String(guardado.amount));
+comprobar('queda pagado, como se cargó', guardado && guardado.paid === 1);
+comprobar('no queda en la lista de sin pagar', viejo.llamar('GET', '/api/year/2026').pending.length === 0);
+
+const impago = viejo.llamar('POST', '/api/movements', {
+  year: 2026, month: 7, day: 27, section: 'variables', category: 'HAL',
+  description: 'Pizza', amount: 9000, paid: false, currency: 'ARS',
+});
+comprobar('marcar pagado no rompe', !viejo.llamar('PUT', `/api/movements/${impago.id}`, { paid: true }).error);
+
 console.log(`\n${pruebas} comprobaciones, ${fallas} con problema.`);
 process.exit(fallas ? 1 : 0);
