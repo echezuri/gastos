@@ -2641,7 +2641,6 @@ async function init() {
 async function arrancarInterfaz() {
   await init();
   pintarEstado();
-  datosFirebase.escuchar();
 }
 
 /**

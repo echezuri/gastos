@@ -16,10 +16,11 @@ import {
   setPersistence,
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 import {
-  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   collection,
   doc,
-  getDocs,
   setDoc,
   deleteDoc,
   onSnapshot,
@@ -27,13 +28,26 @@ import {
 
 const app = initializeApp(CONFIG_FIREBASE);
 const auth = getAuth(app);
-const db = getFirestore(app);
+
+/**
+ * Firestore guarda una copia en el dispositivo.
+ *
+ * Sin esto, abrir la app baja los mil y pico de documentos de cero cada vez y son varios
+ * segundos mirando "Cargando". Con la copia, la primera respuesta es inmediata y el
+ * servidor manda después sólo lo que cambió.
+ *
+ * El administrador de pestañas es para que dos pestañas abiertas compartan esa copia en
+ * vez de pelearse por ella.
+ */
+const db = initializeFirestore(app, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+});
 
 // La sesión sobrevive a cerrar la app: entrás una vez por dispositivo y listo.
 await setPersistence(auth, browserLocalPersistence);
 
 window.arrancarApp(
-  { signInWithEmailAndPassword, onAuthStateChanged, signOut, collection, doc, getDocs, setDoc, deleteDoc, onSnapshot },
+  { signInWithEmailAndPassword, onAuthStateChanged, signOut, collection, doc, setDoc, deleteDoc, onSnapshot },
   auth,
   db
 );

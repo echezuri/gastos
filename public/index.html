@@ -12,6 +12,10 @@
     <meta name="apple-mobile-web-app-title" content="Gastos" />
     <link rel="apple-touch-icon" href="iconos/icono-192.png" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💸</text></svg>" />
+    <!-- Abrir la conexión con Google mientras todavía se está leyendo el HTML: cuando
+         toca cargar el SDK, el saludo de red ya está hecho. -->
+    <link rel="preconnect" href="https://www.gstatic.com" crossorigin />
+    <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>

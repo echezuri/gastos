@@ -108,32 +108,17 @@ const datosFirebase = (() => {
       errorDeEscritura = null;
     },
 
-    /** Arranca con el SDK ya cargado y una sesión abierta. */
-    async iniciar(sdk, base, cuandoCambie) {
-      fb = sdk;
-      db = base;
-      alCambiar = cuandoCambie || (() => {});
-
-      // Todo de una: la app arma cualquier vista con las colecciones enteras, igual que
-      // hacía con la planilla, y así no hay pantallas a medio cargar.
-      await Promise.all(
-        COLECCIONES.map(async (coleccion) => {
-          const foto = await fb.getDocs(fb.collection(db, coleccion));
-          const m = mapa(coleccion);
-          foto.forEach((doc) => m.set(Number(doc.id), { ...doc.data(), id: Number(doc.id) }));
-          delete proximo[coleccion];
-        })
-      );
-    },
-
     /**
-     * Se queda escuchando. Cada cambio —propio o de otro dispositivo— actualiza la copia
-     * y avisa para redibujar.
+     * Se pone a escuchar una colección y avisa cuando llegó la primera tanda.
+     *
+     * Escuchar en vez de pedir y después escuchar ahorra un viaje entero: la primera
+     * respuesta llega de la caché del teléfono, así que abrir la app de nuevo es
+     * instantáneo, y el servidor manda lo que haya cambiado apenas puede.
      */
-    escuchar() {
-      this.dejarDeEscuchar();
-      cortarEscuchas = COLECCIONES.map((coleccion) =>
-        fb.onSnapshot(
+    seguir(coleccion) {
+      return new Promise((listo, falla) => {
+        let primera = true;
+        const cortar = fb.onSnapshot(
           fb.collection(db, coleccion),
           (foto) => {
             let hubo = false;
@@ -143,13 +128,40 @@ const datosFirebase = (() => {
               else mapa(coleccion).set(id, { ...cambio.doc.data(), id });
               hubo = true;
             });
+            if (primera) {
+              primera = false;
+              listo();
+              if (!hubo) return;
+            }
             if (!hubo) return;
             delete proximo[coleccion]; // otro dispositivo pudo haber usado ids nuevos
             alCambiar();
           },
-          avisarFalla
-        )
-      );
+          (err) => {
+            avisarFalla(err);
+            if (primera) {
+              primera = false;
+              falla(err);
+            }
+          }
+        );
+        cortarEscuchas.push(cortar);
+      });
+    },
+
+    /**
+     * Arranca. Espera sólo lo que hace falta para dibujar la pantalla de Año; el auto y la
+     * quinta siguen cargando por atrás mientras ya estás viendo tus gastos.
+     */
+    async iniciar(sdk, base, cuandoCambie) {
+      fb = sdk;
+      db = base;
+      alCambiar = cuandoCambie || (() => {});
+      this.dejarDeEscuchar();
+
+      const ESENCIALES = ['categorias', 'celdas', 'movimientos', 'subcategorias'];
+      await Promise.all(ESENCIALES.map((c) => this.seguir(c)));
+      Promise.all(COLECCIONES.filter((c) => !ESENCIALES.includes(c)).map((c) => this.seguir(c))).catch(avisarFalla);
     },
 
     dejarDeEscuchar() {
