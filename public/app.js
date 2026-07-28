@@ -1405,6 +1405,31 @@ async function refrescarDesdeLocal() {
 
 // ---------------------------------------------------------------- configuración de la planilla
 
+/**
+ * Link que lleva la configuración adentro, para no tener que copiar los IDs a mano en
+ * cada dispositivo. Se abre una vez en el teléfono y queda configurado.
+ */
+function linkParaOtroDispositivo() {
+  const { spreadsheetId, clientId } = sheetsApi.config.leer();
+  const datos = btoa(JSON.stringify({ s: spreadsheetId, c: clientId }));
+  return `${location.origin}${location.pathname}#config=${datos}`;
+}
+
+/** Si el link trae configuración, se guarda y se limpia la dirección. */
+function tomarConfiguracionDelLink() {
+  const marca = '#config=';
+  if (!location.hash.startsWith(marca)) return false;
+  try {
+    const { s, c } = JSON.parse(atob(location.hash.slice(marca.length)));
+    if (!s || !c) return false;
+    sheetsApi.config.escribir({ spreadsheetId: s, clientId: c });
+    history.replaceState(null, '', location.pathname + location.search);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function mostrarConfiguracion({ obligatoria = false } = {}) {
   const actual = sheetsApi.config.leer();
   const idPlanilla = el('input', { class: 'field-input', type: 'text', value: actual.spreadsheetId, placeholder: '1iaAWee…' });
@@ -1444,6 +1469,22 @@ function mostrarConfiguracion({ obligatoria = false } = {}) {
     }
   };
 
+  // Botón para llevar la configuración al teléfono sin copiar nada a mano
+  const avisoLink = el('small', { class: 'field-hint' });
+  const botonLink = el('button', {
+    class: 'btn btn-ghost login-btn',
+    text: '📱 Copiar link para otro dispositivo',
+    onclick: async () => {
+      const link = linkParaOtroDispositivo();
+      try {
+        await navigator.clipboard.writeText(link);
+        avisoLink.textContent = 'Copiado. Mandátelo al teléfono y abrilo: queda configurado solo.';
+      } catch {
+        avisoLink.textContent = link;
+      }
+    },
+  });
+
   const caja = el('div', { id: 'config', class: 'login' }, [
     el('div', { class: 'login-caja config-caja' }, [
       el('div', { class: 'brand-mark', text: '$' }),
@@ -1451,6 +1492,8 @@ function mostrarConfiguracion({ obligatoria = false } = {}) {
       el('label', { class: 'field' }, [el('span', { text: 'ID de la planilla' }), idPlanilla]),
       el('label', { class: 'field' }, [el('span', { text: 'ID de cliente de Google' }), idCliente]),
       el('button', { class: 'btn btn-accent login-btn', text: 'Guardar y conectar', onclick: guardar }),
+      sheetsApi.config.completa() ? botonLink : null,
+      sheetsApi.config.completa() ? avisoLink : null,
       obligatoria ? null : el('button', { class: 'btn btn-ghost login-btn', text: 'Cerrar', onclick: () => document.getElementById('config').remove() }),
       error,
     ]),
@@ -2244,6 +2287,8 @@ async function arrancarInterfaz() {
 
 async function arrancarPwa() {
   almacenLocal.instalar();
+  // Si entraste con el link que trae la configuración, ya queda todo puesto
+  tomarConfiguracionDelLink();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('sw.js').catch(() => {});

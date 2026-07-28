@@ -49,14 +49,25 @@ const scripts = `<script src="https://accounts.google.com/gsi/client" async defe
     <script src="logica.js"></script>
     <script src="charts.js"></script>`;
 
-const html = fs
+let html = fs
   .readFileSync(path.join(publico, 'index.html'), 'utf8')
   .replace('<!-- PWA:SCRIPTS -->\n    <script src="charts.js"></script>', scripts);
 
 if (!html.includes('almacen-local.js')) {
   throw new Error('No pude insertar los scripts de la PWA en index.html');
 }
+
+// Cada build marca sus archivos con una versión. Sin esto, el navegador (y GitHub Pages,
+// que cachea) pueden seguir usando la copia vieja después de actualizar.
+const version = Date.now().toString(36);
+html = html.replace(/(src|href)="((?!http)[^"]+\.(?:js|css))"/g, `$1="$2?v=${version}"`);
 fs.writeFileSync(path.join(destino, 'index.html'), html, 'utf8');
+
+// El service worker también cambia de nombre de caché en cada build
+const sw = fs
+  .readFileSync(path.join(publico, 'sw.js'), 'utf8')
+  .replace(/const VERSION = '[^']+'/, `const VERSION = 'gastos-${version}'`);
+fs.writeFileSync(path.join(destino, 'sw.js'), sw, 'utf8');
 
 // GitHub Pages no publica carpetas que empiezan con guion bajo ni procesa Jekyll: esto lo evita
 fs.writeFileSync(path.join(destino, '.nojekyll'), '', 'utf8');

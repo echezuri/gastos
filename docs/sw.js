@@ -2,7 +2,7 @@
 // Los datos NO se cachean (siempre se piden al servidor); lo que se guarda offline es
 // la carga de movimientos, y eso lo maneja la página con su propia cola.
 // Rutas relativas: la app puede estar en una subcarpeta (GitHub Pages)
-const VERSION = 'gastos-v2';
+const VERSION = 'gastos-ms3xlqqn';
 const SHELL = [
   './',
   'index.html',
@@ -48,8 +48,12 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     fetch(request)
       .then((respuesta) => {
-        const copia = respuesta.clone();
-        caches.open(VERSION).then((cache) => cache.put(request, copia));
+        // Sólo se guarda lo que salió bien: cachear un 404 o un error deja la app
+        // pegada a una versión rota hasta que se limpie a mano.
+        if (respuesta.ok && respuesta.type === 'basic') {
+          const copia = respuesta.clone();
+          caches.open(VERSION).then((cache) => cache.put(request, copia));
+        }
         return respuesta;
       })
       .catch(() => caches.match(request).then((cacheada) => cacheada || caches.match('index.html')))
