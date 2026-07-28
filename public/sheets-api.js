@@ -136,9 +136,48 @@ const sheetsApi = (() => {
     return tablas;
   }
 
+  /**
+   * En qué fila del Sheet está cada id, por pestaña. Se arma leyendo una sola columna.
+   *
+   * Vive lo que dura una subida: apenas algo cambia la forma de la pestaña se tira, así la
+   * siguiente operación lo vuelve a preguntar en vez de trabajar con un mapa viejo.
+   */
+  let filasPorId = {};
+
+  async function mapaDeFilas(hoja, columnaId) {
+    if (filasPorId[hoja]) return filasPorId[hoja];
+    const letra = columnaEnLetras(columnaId);
+    const datos = await pedir(
+      `/values/${encodeURIComponent(rango(hoja, `${letra}:${letra}`))}?valueRenderOption=UNFORMATTED_VALUE`
+    );
+    const mapa = new Map();
+    (datos.values || []).forEach((fila, i) => {
+      const id = fila[0];
+      if (i > 0 && id !== undefined && id !== null && id !== '') mapa.set(String(id), i + 1);
+    });
+    filasPorId[hoja] = mapa;
+    return mapa;
+  }
+
+  /**
+   * La fila real de una operación, ahora, en el Sheet.
+   *
+   * El número que trae la operación se calculó contra la copia local del dispositivo. Si
+   * mientras tanto otro borró una fila de más arriba, ese número ya apunta a otro registro:
+   * por eso manda el id. Devuelve null si el registro ya no está.
+   */
+  async function filaReal(op) {
+    if (op.id === undefined || !op.columnaId) return op.fila; // encabezado y tablas sin id
+    const mapa = await mapaDeFilas(op.hoja, op.columnaId);
+    return mapa.get(String(op.id)) ?? null;
+  }
+
   /** Manda al Sheet las operaciones que quedaron anotadas, en orden. */
   async function subir(pendientes, alConfirmar) {
     let enviadas = 0;
+    let salteadas = 0;
+    filasPorId = {};
+
     for (const op of pendientes) {
       if (op.tipo === 'crear') {
         const r = await pedir(':batchUpdate', {
@@ -147,38 +186,56 @@ const sheetsApi = (() => {
         });
         const props = r.replies?.[0]?.addSheet?.properties;
         if (props) idsDeHoja[props.title] = props.sheetId;
+        delete filasPorId[op.hoja];
       } else if (op.tipo === 'agregar') {
         await pedir(
           `/values/${encodeURIComponent(rango(op.hoja, 'A:A'))}:append?valueInputOption=RAW&insertDataOption=INSERT_ROWS`,
           { method: 'POST', body: JSON.stringify({ values: op.valores }) }
         );
+        // Las filas nuevas no están en el mapa: se vuelve a leer cuando haga falta
+        delete filasPorId[op.hoja];
       } else if (op.tipo === 'escribir') {
-        const alto = op.valores.length;
-        const ancho = op.valores[0].length;
-        const desde = `${columnaEnLetras(op.columna)}${op.fila}`;
-        const hasta = `${columnaEnLetras(op.columna + ancho - 1)}${op.fila + alto - 1}`;
-        await pedir(
-          `/values/${encodeURIComponent(rango(op.hoja, `${desde}:${hasta}`))}?valueInputOption=RAW`,
-          { method: 'PUT', body: JSON.stringify({ values: op.valores }) }
-        );
+        const fila = await filaReal(op);
+        if (fila === null) salteadas++;
+        else {
+          const alto = op.valores.length;
+          const ancho = op.valores[0].length;
+          const desde = `${columnaEnLetras(op.columna)}${fila}`;
+          const hasta = `${columnaEnLetras(op.columna + ancho - 1)}${fila + alto - 1}`;
+          await pedir(
+            `/values/${encodeURIComponent(rango(op.hoja, `${desde}:${hasta}`))}?valueInputOption=RAW`,
+            { method: 'PUT', body: JSON.stringify({ values: op.valores }) }
+          );
+        }
       } else if (op.tipo === 'borrar') {
-        const id = idsDeHoja[op.hoja];
-        if (id === undefined) throw new Error(`No encuentro la pestaña ${op.hoja}`);
-        await pedir(':batchUpdate', {
-          method: 'POST',
-          body: JSON.stringify({
-            requests: [
-              { deleteDimension: { range: { sheetId: id, dimension: 'ROWS', startIndex: op.fila - 1, endIndex: op.fila } } },
-            ],
-          }),
-        });
+        const hojaId = idsDeHoja[op.hoja];
+        if (hojaId === undefined) throw new Error(`No encuentro la pestaña ${op.hoja}`);
+        const fila = await filaReal(op);
+        if (fila === null) salteadas++; // ya lo borró otro dispositivo: listo
+        else {
+          await pedir(':batchUpdate', {
+            method: 'POST',
+            body: JSON.stringify({
+              requests: [
+                { deleteDimension: { range: { sheetId: hojaId, dimension: 'ROWS', startIndex: fila - 1, endIndex: fila } } },
+              ],
+            }),
+          });
+          // Todo lo que estaba abajo subió un lugar
+          const mapa = filasPorId[op.hoja];
+          if (mapa) {
+            mapa.delete(String(op.id));
+            for (const [k, v] of mapa) if (v > fila) mapa.set(k, v - 1);
+          }
+        }
       } else if (op.tipo === 'vaciar') {
         await pedir(`/values/${encodeURIComponent(rango(op.hoja))}:clear`, { method: 'POST', body: '{}' });
+        delete filasPorId[op.hoja];
       }
       enviadas++;
       if (alConfirmar) alConfirmar(enviadas);
     }
-    return enviadas;
+    return { enviadas, salteadas };
   }
 
   return { config, autorizar, desconectar, conectado, bajarTodo, subir, PESTANAS };

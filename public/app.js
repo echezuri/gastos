@@ -1691,12 +1691,12 @@ async function sincronizarConSheet({ forzar = false, bajar = false } = {}) {
     await sheetsApi.autorizar({ silencioso: !forzar });
 
     const pendientes = almacenLocal.pendientes();
+    let salteadas = 0;
     if (pendientes.length) {
-      await sheetsApi.subir(pendientes.slice(), (enviadas) => {
+      ({ salteadas } = await sheetsApi.subir(pendientes.slice(), () => {
         // se confirman de a una: si se corta, no se reenvía lo ya subido
         almacenLocal.confirmarEnviadas(1);
-        void enviadas;
-      });
+      }));
     }
 
     if (bajar || forzar) {
@@ -1710,6 +1710,10 @@ async function sincronizarConSheet({ forzar = false, bajar = false } = {}) {
     sincro.estado = 'listo';
     const fecha = almacenLocal.fechaSincronizado();
     sincro.detalle = fecha ? `Última bajada: ${new Date(fecha).toLocaleString('es-AR')}` : '';
+    // Un cambio sobre algo que ya no existe no es un error, pero conviene decirlo
+    if (salteadas) {
+      sincro.detalle = `${salteadas} cambio(s) ya no aplicaban (los borraste en otro lado). ${sincro.detalle}`;
+    }
   } catch (err) {
     // La primera vez Google necesita abrir su ventana de permisos, y eso sólo puede pasar
     // si lo pedís vos tocando algo: por eso el chip pasa a decir "Conectar".
@@ -1724,6 +1728,46 @@ async function sincronizarConSheet({ forzar = false, bajar = false } = {}) {
       sincronizarConSheet();
     }
   }
+}
+
+/**
+ * Mantiene al día el dispositivo que está a la vista.
+ *
+ * El Sheet no avisa cuando algo cambia: no hay forma de que una página estática se entere
+ * sola. Así que se pregunta, y sólo cuando tiene sentido: la pestaña que no estás mirando
+ * no pregunta nada.
+ *
+ * No se baja mientras estás escribiendo o con un diálogo abierto, porque bajar reemplaza la
+ * copia local y vuelve a dibujar la pantalla: te comería lo que estás tipeando.
+ */
+const CADA = 60_000;
+const SEGUIDAS = 15_000;
+let ultimaMirada = 0;
+
+function estasEnElMedioDeAlgo() {
+  if (document.querySelector('dialog[open]')) return true;
+  const foco = document.activeElement;
+  return Boolean(foco && ['INPUT', 'SELECT', 'TEXTAREA'].includes(foco.tagName));
+}
+
+function mirarPorCambios() {
+  if (document.hidden || !navigator.onLine) return;
+  if (estasEnElMedioDeAlgo()) return;
+  // Volver a la pestaña dispara visibilitychange y focus casi al mismo tiempo: sin esto
+  // serían dos bajadas de toda la planilla, una atrás de la otra.
+  if (Date.now() - ultimaMirada < SEGUIDAS) return;
+  ultimaMirada = Date.now();
+  sincronizarConSheet({ bajar: true });
+}
+
+function activarSincronizacionAutomatica() {
+  if (MODO !== 'pwa') return;
+  setInterval(mirarPorCambios, CADA);
+  // Volver a la app es el momento más probable de haber cargado algo en el teléfono
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) mirarPorCambios();
+  });
+  window.addEventListener('focus', mirarPorCambios);
 }
 
 /** Vuelve a leer todo de la copia local (después de bajar cambios del Sheet). */
@@ -2739,6 +2783,8 @@ async function arrancarPwa() {
     mostrarConfiguracion({ obligatoria: true });
     return;
   }
+
+  activarSincronizacionAutomatica();
 
   if (almacenLocal.hayDatos()) {
     // Arranca con lo que ya está en el teléfono: instantáneo. La planilla se lee después.

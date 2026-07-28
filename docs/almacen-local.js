@@ -41,6 +41,24 @@ const almacenLocal = (() => {
     pendientes.push(operacion);
   }
 
+  /**
+   * Con qué id se identifica la fila, y en qué columna vive ese id.
+   *
+   * Los pendientes de editar y borrar viajan con el id, no sólo con el número de fila: si
+   * otro dispositivo borró algo antes de que esto llegue al Sheet, las filas de abajo se
+   * corrieron y escribiríamos encima del movimiento equivocado. La fila 1 es el encabezado
+   * y no tiene id: esa sí va por posición.
+   */
+  function identidad(nombre, fila) {
+    if (fila <= 1) return null;
+    const tabla = tablas[nombre] || [];
+    const columnaId = (tabla[0] || []).indexOf('id');
+    if (columnaId < 0) return null;
+    const valor = (tabla[fila - 1] || [])[columnaId];
+    if (valor === undefined || valor === null || valor === '') return null;
+    return { id: valor, columnaId: columnaId + 1 };
+  }
+
   /** Planilla falsa con los métodos que usa la lógica compartida. */
   function hacerHoja(nombre) {
     return {
@@ -54,26 +72,29 @@ const almacenLocal = (() => {
       },
       getRange: (fila, col, alto, ancho) => ({
         setValue: (v) => {
+          const quien = identidad(nombre, fila);
           const f = tablas[nombre][fila - 1];
           while (f.length < col) f.push('');
           f[col - 1] = v;
-          anotar({ tipo: 'escribir', hoja: nombre, fila, columna: col, valores: [[v]] });
+          anotar({ tipo: 'escribir', hoja: nombre, fila, columna: col, valores: [[v]], ...quien });
         },
         setValues: (valores) => {
           const esAgregado = fila - 1 >= tablas[nombre].length;
+          const quien = esAgregado ? null : identidad(nombre, fila);
           valores.forEach((f, i) => {
             tablas[nombre][fila - 1 + i] = f.slice();
           });
           anotar(
             esAgregado
               ? { tipo: 'agregar', hoja: nombre, valores: valores.map((f) => f.slice()) }
-              : { tipo: 'escribir', hoja: nombre, fila, columna: col, valores: valores.map((f) => f.slice()) }
+              : { tipo: 'escribir', hoja: nombre, fila, columna: col, valores: valores.map((f) => f.slice()), ...quien }
           );
         },
       }),
       deleteRow: (fila) => {
+        const quien = identidad(nombre, fila);
         tablas[nombre].splice(fila - 1, 1);
-        anotar({ tipo: 'borrar', hoja: nombre, fila });
+        anotar({ tipo: 'borrar', hoja: nombre, fila, ...quien });
       },
       setFrozenRows: () => {},
       clear: () => {

@@ -36,8 +36,10 @@ se actualiza solo en un minuto.
 ## Pruebas
 
 ```bash
-node tools/probar-apps-script.js   # 47 comprobaciones: la lógica del Sheet contra la base local
+npm test                           # las tres suites de abajo, en orden
+node tools/probar-apps-script.js   # 83 comprobaciones: la lógica del Sheet contra la base local
 node tools/probar-importacion.js   # 15: arranca de una planilla vacía e importa
+node tools/probar-sincronizacion.js # 15: dos dispositivos sobre el mismo Sheet, sin pisarse
 node tools/verify-import.js        # totales contra el sheet original
 node tools/medir-llamadas.js       # idas y vueltas al servidor (que no crezcan)
 ```
@@ -75,8 +77,19 @@ La app escribe siempre en la copia local (instantáneo) y anota cada cambio en u
 pendientes que se manda al Sheet por atrás. El chip de arriba a la derecha muestra el estado:
 *Al día*, *3 sin subir*, *Sin conexión*, *Conectar*.
 
-Por eso: **no editar el Sheet a mano mientras haya cambios sin subir**. La app calcula en qué
-fila escribir con su copia local.
+**Cada dispositivo tiene su propia copia.** El Sheet no puede avisar que algo cambió, así que
+la app pregunta: al abrirse, al volver a la pestaña, al tomar foco y cada 60 segundos mientras
+la estás mirando. No baja si hay un diálogo abierto o si estás escribiendo en un campo, porque
+bajar reemplaza la copia local y redibuja.
+
+**Editar y borrar viajan con el `id`, no con el número de fila** (`almacen-local.js` lo anota,
+`sheets-api.js` lo resuelve al subir). Si otro dispositivo borró algo de más arriba, las filas
+se corren y el número viejo apuntaría a otro registro. Un cambio sobre algo que ya no existe se
+saltea y se avisa en el chip. Esto es lo que prueba `tools/probar-sincronizacion.js`: si tocás
+el formato de los pendientes o la subida, esa suite es la que tiene que seguir en verde.
+
+Se puede mirar el Sheet a mano sin problema. Lo que no hay que hacer es **cambiar los `id`**:
+son la identidad de cada fila.
 
 ## Modelo de datos
 

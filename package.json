@@ -6,6 +6,7 @@
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
+    "test": "node tools/probar-apps-script.js && node tools/probar-importacion.js && node tools/probar-sincronizacion.js",
     "start": "node --no-warnings=ExperimentalWarning server.js",
     "import": "node --no-warnings=ExperimentalWarning tools/import-sheet.js",
     "backup": "node --no-warnings=ExperimentalWarning tools/backup.js",
