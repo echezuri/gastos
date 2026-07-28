@@ -1843,8 +1843,34 @@ tr.grupo-primero:first-child td {
     overflow-x: auto;
   }
 
+  /* En el teléfono la grilla se mira de a un mes.
+     El mes en curso va ancho y cómodo —es el que se lee y se toca— y los otros quedan
+     angostos, al alcance de un desplazamiento con el dedo. La columna de categoría queda
+     fija a la izquierda, así nunca se pierde de vista de qué fila es cada número. */
   .panel table {
-    min-width: 1300px; /* para que los importes entren enteros y no queden cortados */
+    min-width: 0; /* el ancho lo dan las columnas, no un número inventado */
+  }
+
+  .panel thead th {
+    width: 62px;
+  }
+
+  .panel thead th.mes-actual {
+    width: 132px;
+  }
+
+  .panel thead th.col-label {
+    width: 116px;
+  }
+
+  .panel thead th.year-col,
+  .panel thead th.pct-col {
+    width: 74px;
+  }
+
+  .mes-actual .cell-detail,
+  .mes-actual .cell-input {
+    font-size: 15px;
   }
 
   .mov-table {
@@ -1852,7 +1878,7 @@ tr.grupo-primero:first-child td {
   }
 
   .col-label {
-    width: 132px;
+    width: 116px;
   }
 
   .chart-grid {

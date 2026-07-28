@@ -2042,6 +2042,37 @@ function renderYear() {
     );
     if (target) target.focus();
   }
+
+  ubicarGrilla();
+}
+
+/**
+ * Deja la grilla mostrando el mes en curso, pegado a la columna de categoría.
+ *
+ * En el teléfono no entran los doce meses, así que la app abre en el que te importa en vez
+ * de en enero. Después respeta hasta dónde desplazaste vos: redibujar por un cambio de otro
+ * dispositivo no te devuelve al principio.
+ */
+let scrollDeLaGrilla = null;
+
+function ubicarGrilla() {
+  for (const caja of document.querySelectorAll('#app .scroll-x')) {
+    if (caja.scrollWidth <= caja.clientWidth) continue; // en pantalla grande entra todo
+    const mes = caja.querySelector('th.mes-actual');
+    const etiqueta = caja.querySelector('th.col-label');
+    if (!mes) continue;
+    if (scrollDeLaGrilla !== null) caja.scrollLeft = scrollDeLaGrilla;
+    else {
+      // Por diferencia de posiciones reales y no por offsetLeft: la columna de categoría
+      // está fija encima de la tabla, así que hay que dejarla justo del otro lado o el mes
+      // queda debajo de ella.
+      const borde = etiqueta ? etiqueta.getBoundingClientRect().right : caja.getBoundingClientRect().left;
+      caja.scrollLeft += mes.getBoundingClientRect().left - borde;
+    }
+    caja.addEventListener('scroll', () => {
+      scrollDeLaGrilla = caja.scrollLeft;
+    });
+  }
 }
 
 async function refreshMovements() {
