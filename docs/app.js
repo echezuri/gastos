@@ -146,42 +146,26 @@ function toast(message, isError = false) {
 }
 
 /**
- * La misma app corre en tres lados:
- *   - 'servidor': contra el servidor local, por fetch.
- *   - 'sheets-script': adentro del Google Sheet, por google.script.run.
- *   - 'pwa': como aplicación instalada. Trabaja contra una copia local de la planilla,
- *     así responde al instante, y sincroniza con el Sheet por atrás.
+ * La app corre en dos lados:
+ *   - 'pwa': lo que usás. La lógica corre en el navegador contra Firestore.
+ *   - 'servidor': `npm start`, contra la base local en SQLite. Sólo para desarrollar.
  */
-const EN_SHEETS = typeof google !== 'undefined' && Boolean(google.script && google.script.run);
-const MODO = EN_SHEETS ? 'sheets-script' : typeof almacenLocal !== 'undefined' ? 'pwa' : 'servidor';
+const MODO = typeof datosFirebase !== 'undefined' ? 'pwa' : 'servidor';
 
-/** En modo PWA todo se resuelve contra la copia local: sin esperas. */
+/**
+ * Todo se resuelve en el acto contra la copia en memoria.
+ *
+ * Lo que se escribe sale para Firestore por atrás, pero la pantalla no lo espera: el
+ * documento ya tiene id y la copia local ya está al día.
+ */
 function apiLocal(method, url, body) {
   const respuesta = JSON.parse(llamarApi(method, url, body || null));
   if (respuesta && respuesta.error) throw new Error(respuesta.error);
-  if (method !== 'GET') {
-    almacenLocal.guardar();
-    sincronizarConSheet(); // por atrás, sin bloquear
-  }
   return respuesta;
-}
-
-function apiSheets(method, url, body) {
-  return new Promise((resolve, reject) => {
-    google.script.run
-      .withSuccessHandler((respuesta) => {
-        const data = typeof respuesta === 'string' ? JSON.parse(respuesta) : respuesta;
-        if (data && data.error) reject(new Error(data.error));
-        else resolve(data);
-      })
-      .withFailureHandler((err) => reject(new Error(err && err.message ? err.message : 'Error en la planilla')))
-      .llamarApi(method, url, body || null);
-  });
 }
 
 async function api(method, url, body) {
   if (MODO === 'pwa') return apiLocal(method, url, body);
-  if (EN_SHEETS) return apiSheets(method, url, body);
   const res = await fetch(url, {
     method,
     headers: body ? { 'Content-Type': 'application/json' } : undefined,
@@ -1619,159 +1603,73 @@ async function submitForm(event, keepOpen) {
 
 // ---------------------------------------------------------------- sincronización con el Sheet
 
-const sincro = { corriendo: false, pedidaDeNuevo: false, estado: 'listo', detalle: '' };
+// ---------------------------------------------------------------- estado de la conexión
 
-/** Traduce los errores de permiso de Google a algo que diga qué hacer. */
-function mensajeDePermiso(mensaje) {
-  if (/access_denied|no ha completado|verificaci/i.test(mensaje)) {
-    return (
-      'Google bloqueó el acceso porque tu cuenta no figura como usuario de prueba. ' +
-      'Entrá a console.cloud.google.com → Pantalla de consentimiento de OAuth → Usuarios de prueba, ' +
-      'agregá tu cuenta y volvé a tocar Conectar.'
-    );
-  }
-  if (/origin|redirect_uri/i.test(mensaje)) {
-    return (
-      'Google rechazó la dirección desde la que estás entrando. En la credencial, ' +
-      'Orígenes autorizados de JavaScript tiene que incluir exactamente ' +
-      location.origin
-    );
-  }
-  if (/cliente|client/i.test(mensaje)) return 'Revisá el ID de cliente en el engranaje ⚙.';
-  return 'Tocá acá para conectar con tu cuenta de Google';
-}
+const estado = { entrando: false, cargando: false };
 
-function pintarSincro() {
+/**
+ * El cartelito de arriba a la derecha. Con Firestore casi siempre está en silencio: sólo
+ * habla cuando algo no se pudo guardar o cuando te quedaste sin señal.
+ */
+function pintarEstado() {
   if (MODO !== 'pwa') return;
   let chip = document.getElementById('sincro');
   if (!chip) {
-    chip = el('button', {
-      id: 'sincro',
-      class: 'sincro',
-      title: 'Sincronizar con la planilla',
-      onclick: () => sincronizarConSheet({ forzar: true }),
-    });
+    chip = el('button', { id: 'sincro', class: 'sincro', onclick: () => reintentar() });
     document.querySelector('.topbar-right').prepend(chip);
   }
-  const pendientes = almacenLocal.pendientes().length;
-  const textos = {
-    listo: pendientes ? `${pendientes} sin subir` : 'Al día',
-    subiendo: 'Sincronizando…',
-    error: 'Sin sincronizar',
-    'sin-conexion': 'Sin conexión',
-    'sin-permiso': 'Conectar',
-  };
-  chip.textContent = textos[sincro.estado] || 'Al día';
-  chip.className = `sincro is-${sincro.estado}${pendientes && sincro.estado === 'listo' ? ' is-pendiente' : ''}`;
-  chip.title = sincro.detalle || 'Sincronizar con la planilla';
+  const falla = datosFirebase.hayError();
+  if (falla) {
+    chip.textContent = 'No se guardó';
+    chip.className = 'sincro is-error';
+    chip.title = `${falla}\n\nTocá para reintentar.`;
+  } else if (!navigator.onLine) {
+    chip.textContent = 'Sin conexión';
+    chip.className = 'sincro is-sin-conexion';
+    chip.title = 'Los cambios se guardan cuando vuelva la señal.';
+  } else {
+    chip.textContent = 'Al día';
+    chip.className = 'sincro is-listo';
+    chip.title = 'Todo guardado. Lo que cargues en otro dispositivo aparece acá solo.';
+  }
 }
 
-/**
- * Sube lo que haya pendiente y baja la planilla. Se llama sola después de cada cambio,
- * pero nunca hace esperar a la pantalla.
- */
-async function sincronizarConSheet({ forzar = false, bajar = false } = {}) {
-  if (MODO !== 'pwa' || !sheetsApi.config.completa()) return;
-  if (sincro.corriendo) {
-    sincro.pedidaDeNuevo = true;
-    return;
-  }
-  if (!navigator.onLine) {
-    sincro.estado = 'sin-conexion';
-    pintarSincro();
-    return;
-  }
-
-  sincro.corriendo = true;
-  sincro.estado = 'subiendo';
-  sincro.detalle = '';
-  pintarSincro();
-
+/** Vuelve a bajar todo y redibuja. Es la salida cuando algo quedó raro. */
+async function reintentar() {
+  if (estado.cargando) return;
+  estado.cargando = true;
   try {
-    await sheetsApi.autorizar({ silencioso: !forzar });
-
-    const pendientes = almacenLocal.pendientes();
-    let salteadas = 0;
-    if (pendientes.length) {
-      ({ salteadas } = await sheetsApi.subir(pendientes.slice(), () => {
-        // se confirman de a una: si se corta, no se reenvía lo ya subido
-        almacenLocal.confirmarEnviadas(1);
-      }));
-    }
-
-    if (bajar || forzar) {
-      const tablas = await sheetsApi.bajarTodo();
-      if (Object.keys(tablas).length) {
-        almacenLocal.reemplazar(tablas);
-        if (state.data) await refrescarDesdeLocal();
-      }
-    }
-
-    sincro.estado = 'listo';
-    const fecha = almacenLocal.fechaSincronizado();
-    sincro.detalle = fecha ? `Última bajada: ${new Date(fecha).toLocaleString('es-AR')}` : '';
-    // Un cambio sobre algo que ya no existe no es un error, pero conviene decirlo
-    if (salteadas) {
-      sincro.detalle = `${salteadas} cambio(s) ya no aplicaban (los borraste en otro lado). ${sincro.detalle}`;
-    }
+    datosFirebase.olvidarError();
+    await datosFirebase.iniciar(FB.sdk, FB.db, refrescarPantalla);
+    await refrescarPantalla();
   } catch (err) {
-    // La primera vez Google necesita abrir su ventana de permisos, y eso sólo puede pasar
-    // si lo pedís vos tocando algo: por eso el chip pasa a decir "Conectar".
-    const necesitaPermiso = /popup|consent|access_denied|interaction|permiso|token|entrar|cliente|librería/i.test(err.message);
-    sincro.estado = necesitaPermiso ? 'sin-permiso' : 'error';
-    sincro.detalle = necesitaPermiso ? mensajeDePermiso(err.message) : err.message;
+    toast(err.message, true);
   } finally {
-    sincro.corriendo = false;
-    pintarSincro();
-    if (sincro.pedidaDeNuevo) {
-      sincro.pedidaDeNuevo = false;
-      sincronizarConSheet();
-    }
+    estado.cargando = false;
+    pintarEstado();
   }
 }
 
 /**
- * Mantiene al día el dispositivo que está a la vista.
+ * Redibuja con lo que hay en memoria. La llama Firestore cada vez que algo cambia, sea
+ * cosa tuya o de otro dispositivo.
  *
- * El Sheet no avisa cuando algo cambia: no hay forma de que una página estática se entere
- * sola. Así que se pregunta, y sólo cuando tiene sentido: la pestaña que no estás mirando
- * no pregunta nada.
- *
- * No se baja mientras estás escribiendo o con un diálogo abierto, porque bajar reemplaza la
- * copia local y vuelve a dibujar la pantalla: te comería lo que estás tipeando.
+ * No redibuja si estás escribiendo en un campo o con un diálogo abierto: te comería lo
+ * que estás tipeando. El cambio ya está guardado igual; se ve al cerrar.
  */
-const CADA = 60_000;
-const SEGUIDAS = 15_000;
-let ultimaMirada = 0;
+let redibujoPendiente = false;
 
-function estasEnElMedioDeAlgo() {
-  if (document.querySelector('dialog[open]')) return true;
+async function refrescarPantalla() {
+  pintarEstado();
+  if (!state.data) return;
   const foco = document.activeElement;
-  return Boolean(foco && ['INPUT', 'SELECT', 'TEXTAREA'].includes(foco.tagName));
-}
-
-function mirarPorCambios() {
-  if (document.hidden || !navigator.onLine) return;
-  if (estasEnElMedioDeAlgo()) return;
-  // Volver a la pestaña dispara visibilitychange y focus casi al mismo tiempo: sin esto
-  // serían dos bajadas de toda la planilla, una atrás de la otra.
-  if (Date.now() - ultimaMirada < SEGUIDAS) return;
-  ultimaMirada = Date.now();
-  sincronizarConSheet({ bajar: true });
-}
-
-function activarSincronizacionAutomatica() {
-  if (MODO !== 'pwa') return;
-  setInterval(mirarPorCambios, CADA);
-  // Volver a la app es el momento más probable de haber cargado algo en el teléfono
-  document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) mirarPorCambios();
-  });
-  window.addEventListener('focus', mirarPorCambios);
-}
-
-/** Vuelve a leer todo de la copia local (después de bajar cambios del Sheet). */
-async function refrescarDesdeLocal() {
+  const escribiendo = foco && ['INPUT', 'SELECT', 'TEXTAREA'].includes(foco.tagName);
+  if (document.querySelector('dialog[open]') || escribiendo) {
+    redibujoPendiente = true;
+    return;
+  }
+  redibujoPendiente = false;
+  state.revision = null;
   state.data = await api('GET', `/api/year/${state.year}`);
   const { years } = await api('GET', '/api/years');
   state.years = years;
@@ -1784,147 +1682,127 @@ async function refrescarDesdeLocal() {
   else await loadQuinta();
 }
 
-// ---------------------------------------------------------------- configuración de la planilla
-
-/**
- * Link que lleva la configuración adentro, para no tener que copiar los IDs a mano en
- * cada dispositivo. Se abre una vez en el teléfono y queda configurado.
- */
-function linkParaOtroDispositivo() {
-  const { spreadsheetId, clientId } = sheetsApi.config.leer();
-  const datos = btoa(JSON.stringify({ s: spreadsheetId, c: clientId }));
-  return `${location.origin}${location.pathname}#config=${datos}`;
+/** Lo que quedó sin dibujar mientras escribías, apenas soltás el campo. */
+function atenderRedibujoPendiente() {
+  if (redibujoPendiente) refrescarPantalla();
 }
 
-/** Si el link trae configuración, se guarda y se limpia la dirección. */
-function tomarConfiguracionDelLink() {
-  const marca = '#config=';
-  if (!location.hash.startsWith(marca)) return false;
-  try {
-    const { s, c } = JSON.parse(atob(location.hash.slice(marca.length)));
-    if (!s || !c) return false;
-    sheetsApi.config.escribir({ spreadsheetId: s, clientId: c });
-    history.replaceState(null, '', location.pathname + location.search);
-    return true;
-  } catch {
-    return false;
-  }
-}
+// ---------------------------------------------------------------- backup
 
 /**
- * Guarda la planilla entera en un archivo, tal cual está en el teléfono: las mismas
- * pestañas, filas y columnas que tiene el Sheet. Es la red de seguridad antes de sanear,
- * porque borrar una categoría se lleva sus movimientos y no hay vuelta atrás.
+ * Guarda todo en un archivo, tal como está en memoria. Con la base en la nube ya no es la
+ * red de seguridad que era, pero sirve para llevarse los números a otro lado.
  */
 function bajarBackup() {
-  const tablas = almacenLocal.tablas();
-  if (!Object.keys(tablas).length) throw new Error('Todavía no hay datos para guardar');
-  const sinSubir = almacenLocal.pendientes().length;
-  const contenido = {
-    bajado: new Date().toISOString(),
-    sincronizado: almacenLocal.fechaSincronizado(),
-    sinSubir: sinSubir,
-    tablas: tablas,
-  };
+  const tablas = {};
+  for (const coleccion of datosFirebase.COLECCIONES) tablas[coleccion] = datosFirebase.almacen.filas(coleccion);
+  const total = Object.values(tablas).reduce((n, f) => n + f.length, 0);
+  if (!total) throw new Error('Todavía no hay datos para guardar');
+
   const nombre = `gastos-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
-  const url = URL.createObjectURL(new Blob([JSON.stringify(contenido, null, 2)], { type: 'application/json' }));
+  const url = URL.createObjectURL(
+    new Blob([JSON.stringify({ bajado: new Date().toISOString(), tablas }, null, 2)], { type: 'application/json' })
+  );
   const a = el('a', { href: url, download: nombre });
   document.body.append(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
-  return sinSubir ? `${nombre} (ojo: ${sinSubir} cambio(s) todavía sin subir al Sheet)` : nombre;
+  return `${nombre} · ${total} registros`;
 }
 
-function mostrarConfiguracion({ obligatoria = false } = {}) {
-  const actual = sheetsApi.config.leer();
-  const idPlanilla = el('input', { class: 'field-input', type: 'text', value: actual.spreadsheetId, placeholder: '1iaAWee…' });
-  const idCliente = el('input', { class: 'field-input', type: 'text', value: actual.clientId, placeholder: '1234-abc.apps.googleusercontent.com' });
-  const error = el('p', { class: 'login-error' });
+// ---------------------------------------------------------------- entrar
 
-  const guardar = async () => {
-    const valores = { spreadsheetId: idPlanilla.value.trim(), clientId: idCliente.value.trim() };
-    if (!valores.spreadsheetId || !valores.clientId) {
-      error.textContent = 'Faltan datos';
-      return;
-    }
-    // por si pegaste la dirección entera del Sheet
-    const enLaUrl = valores.spreadsheetId.match(/\/d\/([a-zA-Z0-9-_]+)/);
-    if (enLaUrl) valores.spreadsheetId = enLaUrl[1];
-    sheetsApi.config.escribir(valores);
-    document.getElementById('config')?.remove();
-    await sincronizarConSheet({ forzar: true, bajar: true });
+/**
+ * La pantalla de entrada.
+ *
+ * La clave de Firebase viaja en el código y el repositorio es público, así que sola no
+ * sirve para nada: las reglas exigen esta cuenta. Sin entrar no se ve ni un número.
+ */
+function mostrarEntrada(mensaje) {
+  if (document.getElementById('entrada')) return;
+  const email = el('input', { class: 'field-input', type: 'email', autocomplete: 'username', placeholder: 'tu@mail.com' });
+  const clave = el('input', { class: 'field-input', type: 'password', autocomplete: 'current-password', placeholder: 'Clave' });
+  const error = el('p', { class: 'login-error', text: mensaje || '' });
+  const boton = el('button', { class: 'btn btn-accent login-btn', text: 'Entrar' });
 
-    if (sincro.estado === 'sin-permiso' || sincro.estado === 'error') {
-      // El motivo real lo sabe la sincronización: mostrarlo tal cual, no uno inventado
-      mostrarFalla(
-        sincro.detalle,
-        '',
-        sincro.estado === 'sin-permiso' ? 'Google no dio el permiso' : 'No pude leer la planilla'
-      );
-      pintarSincro();
-      return;
-    }
-    if (!almacenLocal.hayDatos()) {
-      mostrarFalla(
-        'La planilla no tiene las pestañas de la app',
-        'Revisá que el ID sea el de la planilla correcta. Las pestañas (Movimientos, Celdas, …) se crean al cargar los datos.'
-      );
-    } else if (!state.data) {
-      await arrancarInterfaz();
+  const entrar = async () => {
+    error.textContent = '';
+    boton.disabled = true;
+    boton.textContent = 'Entrando…';
+    try {
+      await FB.sdk.signInWithEmailAndPassword(FB.auth, email.value.trim(), clave.value);
+      // Lo que sigue lo dispara el aviso de sesión iniciada
+    } catch (err) {
+      error.textContent = /password|credential|invalid/i.test(err.message)
+        ? 'Mail o clave incorrectos.'
+        : err.message;
+      boton.disabled = false;
+      boton.textContent = 'Entrar';
+      clave.select();
     }
   };
 
-  // Botón para llevar la configuración al teléfono sin copiar nada a mano
-  const avisoLink = el('small', { class: 'field-hint' });
-  const botonLink = el('button', {
-    class: 'btn btn-ghost login-btn',
-    text: '📱 Copiar link para otro dispositivo',
-    onclick: async () => {
-      const link = linkParaOtroDispositivo();
-      try {
-        await navigator.clipboard.writeText(link);
-        avisoLink.textContent = 'Copiado. Mandátelo al teléfono y abrilo: queda configurado solo.';
-      } catch {
-        avisoLink.textContent = link;
-      }
-    },
-  });
+  boton.addEventListener('click', entrar);
+  for (const campo of [email, clave]) {
+    campo.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') entrar();
+    });
+  }
 
-  // Antes de sanear conviene tener de dónde volver: esto baja la planilla entera tal como
-  // está en el teléfono, sin pasar por Google.
-  const avisoBackup = el('small', { class: 'field-hint' });
-  const botonBackup = el('button', {
-    class: 'btn btn-ghost login-btn',
-    text: '💾 Bajar un backup',
-    onclick: () => {
-      try {
-        avisoBackup.textContent = `Listo: ${bajarBackup()}`;
-      } catch (err) {
-        avisoBackup.textContent = err.message;
-      }
-    },
-  });
-
-  const caja = el('div', { id: 'config', class: 'login' }, [
-    el('div', { class: 'login-caja config-caja' }, [
-      el('div', { class: 'brand-mark', text: '$' }),
-      el('h1', { class: 'login-titulo', text: obligatoria ? 'Conectar con tu planilla' : 'Configuración' }),
-      el('label', { class: 'field' }, [el('span', { text: 'ID de la planilla' }), idPlanilla]),
-      el('label', { class: 'field' }, [el('span', { text: 'ID de cliente de Google' }), idCliente]),
-      el('button', { class: 'btn btn-accent login-btn', text: 'Guardar y conectar', onclick: guardar }),
-      MODO === 'pwa' && almacenLocal.hayDatos() ? botonBackup : null,
-      MODO === 'pwa' && almacenLocal.hayDatos() ? avisoBackup : null,
-      sheetsApi.config.completa() ? botonLink : null,
-      sheetsApi.config.completa() ? avisoLink : null,
-      obligatoria ? null : el('button', { class: 'btn btn-ghost login-btn', text: 'Cerrar', onclick: () => document.getElementById('config').remove() }),
-      error,
-    ]),
-  ]);
-  document.body.append(caja);
+  document.body.append(
+    el('div', { id: 'entrada', class: 'login' }, [
+      el('div', { class: 'login-caja' }, [
+        el('div', { class: 'brand-mark', text: '$' }),
+        el('h1', { class: 'login-titulo', text: 'Gastos' }),
+        el('label', { class: 'field' }, [el('span', { text: 'Mail' }), email]),
+        el('label', { class: 'field' }, [el('span', { text: 'Clave' }), clave]),
+        boton,
+        error,
+      ]),
+    ])
+  );
+  email.focus();
 }
 
-// ---------------------------------------------------------------- clave de acceso
+function mostrarConfiguracion() {
+  const aviso = el('small', { class: 'field-hint' });
+  document.body.append(
+    el('div', { id: 'config', class: 'login' }, [
+      el('div', { class: 'login-caja config-caja' }, [
+        el('div', { class: 'brand-mark', text: '$' }),
+        el('h1', { class: 'login-titulo', text: 'Configuración' }),
+        el('p', { class: 'dialogo-hint', text: `Conectado a ${CONFIG_FIREBASE.projectId} como ${FB.auth.currentUser?.email || '—'}.` }),
+        el('button', {
+          class: 'btn btn-ghost login-btn',
+          text: '💾 Bajar un backup',
+          onclick: () => {
+            try {
+              aviso.textContent = `Listo: ${bajarBackup()}`;
+            } catch (err) {
+              aviso.textContent = err.message;
+            }
+          },
+        }),
+        aviso,
+        el('button', {
+          class: 'btn btn-ghost login-btn',
+          text: 'Cerrar sesión',
+          onclick: async () => {
+            datosFirebase.dejarDeEscuchar();
+            await FB.sdk.signOut(FB.auth);
+            location.reload();
+          },
+        }),
+        el('button', {
+          class: 'btn btn-ghost login-btn',
+          text: 'Cerrar',
+          onclick: () => document.getElementById('config').remove(),
+        }),
+      ]),
+    ])
+  );
+}
 
 function mostrarLogin(mensaje) {
   if (document.getElementById('login')) return;
@@ -2696,7 +2574,8 @@ function fillYearSelect() {
 
 async function init() {
   // En el Sheet el respaldo lo hace Google con su historial de versiones
-  if (EN_SHEETS) document.querySelector('a[href="/api/backup"]')?.remove();
+  // El link de backup es del servidor local; en la PWA el backup sale del engranaje
+  if (MODO === 'pwa') document.querySelector('a[href="/api/backup"]')?.remove();
 
   // Una sola llamada trae todo lo que hace falta para dibujar la pantalla.
   const current = new Date().getFullYear();
@@ -2758,88 +2637,73 @@ async function init() {
   await setView('anio');
 }
 
-/** Dibuja la interfaz una vez que hay datos locales. */
+/** Dibuja la interfaz una vez que hay datos en memoria. */
 async function arrancarInterfaz() {
   await init();
-  pintarSincro();
+  pintarEstado();
+  datosFirebase.escuchar();
 }
 
-async function arrancarPwa() {
-  almacenLocal.instalar();
-  // Si entraste con el link que trae la configuración, ya queda todo puesto
-  tomarConfiguracionDelLink();
+/**
+ * Arranque de la app de verdad. Lo llama firebase.js cuando el SDK terminó de cargar.
+ *
+ * Firebase recuerda la sesión, así que la pantalla de entrada aparece una sola vez por
+ * dispositivo. El resto de las veces entra derecho.
+ */
+window.arrancarApp = async function (sdk, auth, db) {
+  window.FB = { sdk, auth, db };
+  // De acá saca las filas la lógica compartida (logica.js). Sin esto no puede leer nada.
+  window.ALMACEN = datosFirebase.almacen;
 
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
-  window.addEventListener('online', () => sincronizarConSheet());
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
 
   document.getElementById('add-movement')?.insertAdjacentElement(
     'beforebegin',
     el('button', { class: 'btn btn-ghost', title: 'Configuración', text: '⚙', onclick: () => mostrarConfiguracion() })
   );
 
-  if (!sheetsApi.config.completa()) {
-    mostrarConfiguracion({ obligatoria: true });
-    return;
-  }
+  // Lo que quedó sin dibujar mientras escribías, apenas soltás el campo
+  document.addEventListener('focusout', () => setTimeout(atenderRedibujoPendiente, 0));
+  window.addEventListener('online', pintarEstado);
+  window.addEventListener('offline', pintarEstado);
 
-  activarSincronizacionAutomatica();
-
-  if (almacenLocal.hayDatos()) {
-    // Arranca con lo que ya está en el teléfono: instantáneo. La planilla se lee después.
-    await arrancarInterfaz();
-    sincronizarConSheet({ bajar: true });
-  } else {
-    document.getElementById('app').textContent = 'Bajando la planilla por primera vez…';
-    await sincronizarConSheet({ forzar: true, bajar: true });
-    if (almacenLocal.hayDatos()) await arrancarInterfaz();
-  }
-}
-
-async function arrancar() {
-  if (MODO === 'pwa') return arrancarPwa();
-
-  // Si estamos servidos por Google pero no aparece el puente con la planilla, el
-  // problema es cómo quedó pegado el HTML, no los datos: conviene decirlo claro.
-  if (!EN_SHEETS && /googleusercontent|script\.google/.test(location.hostname)) {
-    mostrarFalla(
-      'La app no encuentra la planilla.',
-      'El archivo Index del proyecto de Apps Script tiene que ser de tipo HTML y contener el ' +
-        'Index.html generado por "npm run build:sheets". Si lo pegaste en un archivo .gs, o si ' +
-        'quedó a medias, google.script.run no existe y no hay forma de leer los datos.'
-    );
-    return;
-  }
-
-  // Adentro del Sheet, Google se encarga de la sesión y no hay service worker
-  // posible (la app corre en un iframe suyo): esa parte sólo aplica al servidor.
-  if (!EN_SHEETS) {
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
-    }
-
-    window.addEventListener('online', () => sincronizarCola({ silencioso: false }));
-    pintarAvisoCola();
-
-    let sesion = { pideClave: false, autenticado: true };
-    try {
-      sesion = await (await fetch('/api/session')).json();
-    } catch {
-      // sin servidor: igual dejamos usar la app para cargar a la cola
-    }
-
-    if (sesion.pideClave && !sesion.autenticado) {
-      mostrarLogin();
+  sdk.onAuthStateChanged(auth, async (usuario) => {
+    if (!usuario) {
+      document.getElementById('app').textContent = '';
+      mostrarEntrada();
       return;
     }
+    document.getElementById('entrada')?.remove();
+    document.getElementById('app').textContent = 'Cargando tus datos…';
+    try {
+      await datosFirebase.iniciar(sdk, db, refrescarPantalla);
+      await arrancarInterfaz();
+      if (new URLSearchParams(location.search).get('cargar')) openForm('gasto');
+    } catch (err) {
+      mostrarFalla(err.message, err.stack, 'No pude leer tus datos');
+    }
+  });
+};
+
+/** Modo servidor local (npm start): sin Firebase, contra SQLite. */
+async function arrancarServidor() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  window.addEventListener('online', () => sincronizarCola({ silencioso: false }));
+  pintarAvisoCola();
+
+  let sesion = { pideClave: false, autenticado: true };
+  try {
+    sesion = await (await fetch('/api/session')).json();
+  } catch {
+    // sin servidor: igual dejamos usar la app para cargar a la cola
   }
-
+  if (sesion.pideClave && !sesion.autenticado) {
+    mostrarLogin();
+    return;
+  }
   await init();
-  if (!EN_SHEETS) await sincronizarCola();
-
-  // El ícono del escritorio abre directo el formulario de carga.
+  await sincronizarCola();
   if (new URLSearchParams(location.search).get('cargar')) openForm('gasto');
 }
 
-arrancar().catch((err) => mostrarFalla(err.message, err.stack));
+if (MODO === 'servidor') arrancarServidor().catch((err) => mostrarFalla(err.message, err.stack));

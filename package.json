@@ -6,14 +6,11 @@
   "type": "commonjs",
   "main": "server.js",
   "scripts": {
-    "test": "node tools/probar-apps-script.js && node tools/probar-importacion.js && node tools/probar-sincronizacion.js && node tools/probar-migracion.js",
+    "test": "node tools/probar-apps-script.js && node tools/probar-migracion.js",
     "start": "node --no-warnings=ExperimentalWarning server.js",
     "import": "node --no-warnings=ExperimentalWarning tools/import-sheet.js",
     "backup": "node --no-warnings=ExperimentalWarning tools/backup.js",
-    "build:sheets": "node tools/build-apps-script.js",
-    "build:pwa": "node tools/build-pwa.js",
-    "export:sheets": "node --no-warnings=ExperimentalWarning tools/exportar-a-sheets.js",
-    "datos:sheets": "node --no-warnings=ExperimentalWarning tools/generar-datos-gs.js"
+    "build:pwa": "node tools/build-pwa.js"
   },
   "engines": {
     "node": ">=22.5.0"

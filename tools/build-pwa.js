@@ -14,7 +14,7 @@ const publico = path.join(raiz, 'public');
 const destino = path.join(raiz, 'docs');
 
 // Archivos de la interfaz que se copian tal cual
-const COPIAR = ['styles.css', 'charts.js', 'app.js', 'manifest.webmanifest', 'sw.js', 'config.js', 'almacen-local.js', 'sheets-api.js'];
+const COPIAR = ['styles.css', 'charts.js', 'app.js', 'manifest.webmanifest', 'sw.js', 'config.js', 'datos-firebase.js', 'firebase.js'];
 
 fs.rmSync(destino, { recursive: true, force: true });
 fs.mkdirSync(path.join(destino, 'iconos'), { recursive: true });
@@ -42,18 +42,22 @@ ${logica}
 );
 
 // El index sólo cambia en los scripts que carga
-const scripts = `<script src="https://accounts.google.com/gsi/client" async defer></script>
-    <script src="config.js"></script>
-    <script src="almacen-local.js"></script>
-    <script src="sheets-api.js"></script>
+const scripts = `<script src="config.js"></script>
+    <script src="datos-firebase.js"></script>
     <script src="logica.js"></script>
     <script src="charts.js"></script>`;
 
 let html = fs
   .readFileSync(path.join(publico, 'index.html'), 'utf8')
-  .replace('<!-- PWA:SCRIPTS -->\n    <script src="charts.js"></script>', scripts);
+  .replace('<!-- PWA:SCRIPTS -->\n    <script src="charts.js"></script>', scripts)
+  // El SDK de Firebase sólo viene como módulo, y los módulos se ejecutan al final: para
+  // entonces app.js ya definió arrancarApp(), que es a quien llama.
+  .replace(
+    '<script src="app.js"></script>',
+    '<script src="app.js"></script>\n    <script type="module" src="firebase.js"></script>'
+  );
 
-if (!html.includes('almacen-local.js')) {
+if (!html.includes('datos-firebase.js')) {
   throw new Error('No pude insertar los scripts de la PWA en index.html');
 }
 

@@ -2,7 +2,7 @@
 // Los datos NO se cachean (siempre se piden al servidor); lo que se guarda offline es
 // la carga de movimientos, y eso lo maneja la página con su propia cola.
 // Rutas relativas: la app puede estar en una subcarpeta (GitHub Pages)
-const VERSION = 'gastos-ms4s32bz';
+const VERSION = 'gastos-ms522jfq';
 const SHELL = [
   './',
   'index.html',
@@ -10,8 +10,8 @@ const SHELL = [
   'charts.js',
   'styles.css',
   'logica.js',
-  'almacen-local.js',
-  'sheets-api.js',
+  'datos-firebase.js',
+  'firebase.js',
   'config.js',
   'manifest.webmanifest',
   'iconos/icono-192.png',

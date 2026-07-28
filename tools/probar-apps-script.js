@@ -1,12 +1,13 @@
-// Corre el código de Apps Script acá, con una planilla simulada cargada desde los CSV
-// que se importan al Sheet, y compara sus respuestas contra las de la app local.
-// Es la única forma de comprobar el backend del Sheet sin subirlo.
+// Corre la lógica de la app contra un almacén en memoria cargado desde los CSV del sheet
+// original, y compara sus respuestas con las de la base local (SQLite).
+//
+// Es lo que garantiza que mover la base de datos no cambió ni un número.
 //
 // Uso: node tools/probar-apps-script.js
 const fs = require('node:fs');
 const path = require('node:path');
 const store = require('../db');
-const { crearPlanilla, cargarCodigo } = require('./planilla-simulada');
+const { crearAlmacen, cargarLogica } = require('./almacen-memoria');
 
 // ---------------------------------------------------------------- planilla simulada
 
@@ -53,15 +54,28 @@ function convertir(valor) {
 function datosDeCsv() {
   const datos = {};
   const dir = path.join(__dirname, '..', 'sheet-export');
+  // Los CSV siguen teniendo los nombres de pestaña del Sheet viejo; las colecciones son
+  // los mismos en minúscula.
+  const COLECCION = {
+    Movimientos: 'movimientos', Celdas: 'celdas', Categorias: 'categorias',
+    Subcategorias: 'subcategorias', Auto: 'autos', AutoServices: 'auto_services',
+    AutoPlan: 'auto_plan', Quinta: 'quinta', QuintaPendientes: 'quinta_pendientes',
+  };
   for (const archivo of fs.readdirSync(dir)) {
     if (!archivo.endsWith('.csv')) continue;
-    const nombre = archivo.replace('.csv', '');
-    datos[nombre] = parsearCsv(fs.readFileSync(path.join(dir, archivo), 'utf8')).map((f) => f.map(convertir));
+    const coleccion = COLECCION[archivo.replace('.csv', '')];
+    if (!coleccion) continue;
+    const matriz = parsearCsv(fs.readFileSync(path.join(dir, archivo), 'utf8')).map((f) => f.map(convertir));
+    const encabezado = (matriz[0] || []).map((c) => String(c ?? '').trim());
+    datos[coleccion] = matriz.slice(1)
+      .filter((f) => f.some((v) => v !== '' && v !== null && v !== undefined))
+      .map((f) => Object.fromEntries(encabezado.map((c, i) => [c, f[i]])))
+      .filter((f) => f.id !== '' && f.id !== undefined);
   }
   return datos;
 }
 
-const contexto = cargarCodigo(crearPlanilla(datosDeCsv()), ['Codigo.gs']);
+const contexto = cargarLogica(crearAlmacen(datosDeCsv()));
 const llamar = contexto.llamar;
 
 // ---------------------------------------------------------------- comparaciones
@@ -274,40 +288,6 @@ const quedan = [2026, 2027].some((anio) =>
 );
 comprobar('limpieza de las pruebas', !quedan);
 
-// ---------------------------------------------------------------- encabezado desfasado
-
-// Un Sheet creado antes de que existieran las columnas de dólares tiene el encabezado
-// corto. Como las filas se leen por el encabezado real y se escriben por posición, sin
-// esto el importe caía en la columna de al lado: los gastos entraban en $0 y sin pagar,
-// y "Marcar pagado" moría con "Importe inválido".
-console.log('\nUna pestaña con el encabezado viejo se completa sola\n');
-
-const VIEJO = ['id', 'anio', 'mes', 'dia', 'tipo', 'seccion', 'categoria', 'subcategoria', 'descripcion', 'monto', 'pagado'];
-const planillaVieja = crearPlanilla({ Movimientos: [VIEJO] });
-const viejo = cargarCodigo(planillaVieja, ['Codigo.gs']);
-
-const alta = viejo.llamar('POST', '/api/movements', {
-  year: 2026, month: 7, day: 27, section: 'tarjetas', category: 'SANTANDER',
-  description: 'Calefactor', amount: 150000, paid: true, cuotas: 2, currency: 'ARS',
-});
-comprobar('carga sin error', !alta.error, alta.error);
-comprobar(
-  'el encabezado ahora tiene las columnas que faltaban',
-  ['moneda', 'monto_moneda', 'cotizacion'].every((c) => planillaVieja.datos.Movimientos[0].includes(c)),
-  JSON.stringify(planillaVieja.datos.Movimientos[0])
-);
-
-const guardado = viejo.llamar('GET', '/api/movements?year=2026&month=7').movements[0];
-comprobar('el importe no se pierde', guardado && guardado.amount === 150000, guardado && String(guardado.amount));
-comprobar('queda pagado, como se cargó', guardado && guardado.paid === 1);
-comprobar('no queda en la lista de sin pagar', viejo.llamar('GET', '/api/year/2026').pending.length === 0);
-
-const impago = viejo.llamar('POST', '/api/movements', {
-  year: 2026, month: 7, day: 27, section: 'variables', category: 'HAL',
-  description: 'Pizza', amount: 9000, paid: false, currency: 'ARS',
-});
-comprobar('marcar pagado no rompe', !viejo.llamar('PUT', `/api/movements/${impago.id}`, { paid: true }).error);
-
 // ---------------------------------------------------------------- revisión
 
 console.log('\nEl informe de revisión encuentra lo que hay para sanear\n');
@@ -333,7 +313,7 @@ comprobar('cuenta Sin clasificar por año', rev.sinClasificar.length === 5 && re
 comprobar('no inventa categorías vacías', rev.vacias.length === 0, JSON.stringify(rev.vacias));
 
 // Una planilla limpia no tiene que dar nada
-const limpia = cargarCodigo(crearPlanilla({}), ['Codigo.gs']);
+const limpia = cargarLogica(crearAlmacen({}));
 limpia.llamar('POST', '/api/movements', {
   year: 2026, month: 3, section: 'variables', category: 'Casa', subcategory: 'Luz',
   amount: 1000, paid: true, currency: 'ARS',
@@ -353,7 +333,7 @@ console.log('\nFusionar, mover de sección y pasar celdas a movimientos\n');
 // Planilla propia: estas operaciones tocan todos los años y no conviene mezclarlas con
 // las pruebas de arriba.
 function planillaDeSaneamiento() {
-  const ctx = cargarCodigo(crearPlanilla({}), ['Codigo.gs']);
+  const ctx = cargarLogica(crearAlmacen({}));
   const celda = (year, section, category, month, amount) =>
     ctx.llamar('PUT', '/api/cell', { year, section, category, month, amount });
   // "INTERNET" y "Internet" conviven en 2023, y en marzo las dos tienen monto

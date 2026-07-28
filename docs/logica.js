@@ -5,221 +5,63 @@
 'use strict';
 
 /**
- * Gastos — la planilla es la base de datos.
+ * Gastos — toda la lógica de la app, en un solo lado.
  *
- * Este archivo corre adentro del Google Sheet (Extensiones > Apps Script). No hay
- * servidor: Google publica la app y estas funciones leen y escriben las pestañas.
- *
- * Pestañas que usa (las crea solas si no están):
- *   Movimientos · Celdas · Categorias · Subcategorias
- *   Auto · AutoServices · AutoPlan · Quinta · QuintaPendientes
- *
- * Los bloques originales del sheet no se tocan.
+ * No sabe dónde están los datos. Habla con un almacén (ver más abajo) que le da filas por
+ * colección y le acepta cambios por id; atrás hay Firestore, o un objeto en memoria cuando
+ * corren las pruebas. Por eso lo mismo que ves en el teléfono es lo que se prueba acá.
  */
 
 // AFIP dejó de ser una sección: ahora es una categoría de gastos fijos.
 const SECCIONES = ['ingresos', 'fijos', 'tarjetas', 'variables', 'ahorro'];
 
-const TABLAS = {
-  Movimientos: ['id', 'anio', 'mes', 'dia', 'tipo', 'seccion', 'categoria', 'subcategoria', 'descripcion', 'moneda', 'monto_moneda', 'cotizacion', 'monto', 'pagado'],
-  Celdas: ['id', 'anio', 'seccion', 'categoria', 'mes', 'monto'],
-  Categorias: ['id', 'anio', 'seccion', 'nombre', 'orden'],
-  Subcategorias: ['id', 'seccion', 'categoria', 'nombre'],
-  Auto: ['id', 'marca', 'modelo', 'anio', 'km', 'dominio', 'motor', 'chasis', 'precio_ars', 'precio_usd'],
-  AutoServices: ['id', 'auto_id', 'km', 'detalle', 'mes', 'precio_ars', 'mano_obra_ars', 'total_usd', 'orden'],
-  AutoPlan: ['id', 'auto_id', 'item', 'detalle', 'extra', 'orden'],
-  Quinta: ['id', 'rubro', 'detalle', 'monto_usd', 'orden'],
-  QuintaPendientes: ['id', 'zona', 'texto', 'hecho', 'orden'],
-};
+// Las colecciones de la base. El almacén las carga y las escucha; acá sólo se nombran.
+const TABLAS = [
+  'categorias', 'celdas', 'movimientos', 'subcategorias',
+  'autos', 'auto_services', 'auto_plan', 'quinta', 'quinta_pendientes',
+];
 
 const TIP_LIMITE = 8;
 
-// ---------------------------------------------------------------- la app
-
-function doGet() {
-  return HtmlService.createTemplateFromFile('Index')
-    .evaluate()
-    .setTitle('Gastos')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-}
-
-/** Atajo desde el menú de la planilla. */
-function onOpen() {
-  SpreadsheetApp.getUi()
-    .createMenu('Gastos')
-    .addItem('Abrir la app', 'mostrarApp')
-    .addToUi();
-}
-
-function mostrarApp() {
-  const html = HtmlService.createTemplateFromFile('Index').evaluate().setWidth(1400).setHeight(900);
-  SpreadsheetApp.getUi().showModalDialog(html, 'Gastos');
-}
+// ---------------------------------------------------------------- acceso a los datos
 
 /**
- * Chequeo rápido de la planilla. Se corre desde el editor de Apps Script (botón Ejecutar)
- * y el resultado se ve en el registro de ejecución: dice qué pestañas encontró y cuántas
- * filas tiene cada una. Sirve para descartar que el problema sea la importación.
- */
-function diagnostico() {
-  const libro = SpreadsheetApp.getActive();
-  const existentes = libro.getSheets().map(function (h) { return h.getName(); });
-  Logger.log('Pestañas del documento: ' + existentes.join(', '));
-  Object.keys(TABLAS).forEach(function (nombre) {
-    if (existentes.indexOf(nombre) < 0) {
-      Logger.log('FALTA la pestaña ' + nombre);
-      return;
-    }
-    const filas = leer(nombre);
-    const encabezados = libro.getSheetByName(nombre).getDataRange().getValues()[0] || [];
-    const faltan = TABLAS[nombre].filter(function (c) { return encabezados.indexOf(c) < 0; });
-    Logger.log(
-      nombre + ': ' + filas.length + ' fila(s)' + (faltan.length ? '  — faltan columnas: ' + faltan.join(', ') : '')
-    );
-  });
-  Logger.log('Años con datos: ' + aniosCargados().join(', '));
-  return 'listo, mirá el registro de ejecución';
-}
-
-// ---------------------------------------------------------------- acceso a las pestañas
-
-function hoja(nombre) {
-  const libro = SpreadsheetApp.getActive();
-  let h = libro.getSheetByName(nombre);
-  if (!h) {
-    h = libro.insertSheet(nombre);
-    h.appendRow(TABLAS[nombre]);
-    h.setFrozenRows(1);
-  }
-  return h;
-}
-
-/**
- * Cada pestaña se lee una sola vez por llamada. Leer una hoja cuesta caro y una misma
- * operación consulta varias veces las mismas tablas, así que se memorizan mientras dura
- * la llamada y se olvidan apenas se escribe algo.
- */
-let MEMORIA = {};
-let ENCABEZADOS = {};
-
-function olvidar(nombre) {
-  // El encabezado no cambia al escribir filas: sólo se olvida todo junto, al empezar
-  // otra llamada.
-  if (nombre) delete MEMORIA[nombre];
-  else {
-    MEMORIA = {};
-    ENCABEZADOS = {};
-  }
-}
-
-/** Devuelve las filas como objetos, más el número de fila real para poder editarlas. */
-function leer(nombre) {
-  if (MEMORIA[nombre]) return MEMORIA[nombre];
-  const valores = hoja(nombre).getDataRange().getValues();
-  const encabezados = (valores[0] || []).map(texto);
-  while (encabezados.length && encabezados[encabezados.length - 1] === '') encabezados.pop();
-  ENCABEZADOS[nombre] = encabezados;
-  const filas = [];
-  for (let i = 1; i < valores.length; i++) {
-    if (valores[i].every(function (v) { return v === '' || v === null; })) continue;
-    const obj = { _fila: i + 1 };
-    for (let c = 0; c < encabezados.length; c++) obj[encabezados[c]] = valores[i][c];
-    filas.push(obj);
-  }
-  MEMORIA[nombre] = filas;
-  return filas;
-}
-
-/**
- * Los nombres de columna tal como están en la pestaña, no como los lista TABLAS.
+ * De dónde salen las filas y a dónde van.
  *
- * Las filas se leen por el encabezado del Sheet y se escriben por posición, así que si los
- * dos no coinciden cada dato cae en la columna equivocada y se pierde sin avisar. Manda el
- * encabezado real; las columnas que le falten se agregan al final una sola vez.
+ * Nada de acá abajo sabe qué hay atrás: sólo pide filas por colección y las cambia por id.
+ * Quien arranca la app pone el almacén: "datos-firebase.js" contra Firestore en la app de
+ * verdad, "tools/almacen-memoria.js" en las pruebas.
+ *
+ * Todo es sincrónico a propósito. La app trabaja contra una copia en memoria que se
+ * mantiene al día sola, así la pantalla contesta en el acto y nunca queda a medio camino.
  */
-function columnas(nombre) {
-  leer(nombre); // deja ENCABEZADOS[nombre] al día
-  const actuales = ENCABEZADOS[nombre];
-  const faltan = TABLAS[nombre].filter(function (c) { return actuales.indexOf(c) < 0; });
-  if (!faltan.length) return actuales;
-  const completas = actuales.concat(faltan);
-  hoja(nombre).getRange(1, 1, 1, completas.length).setValues([completas]);
-  ENCABEZADOS[nombre] = completas;
-  olvidar(nombre);
-  return completas;
+function leer(coleccion) {
+  return ALMACEN.filas(coleccion);
 }
 
-function proximoId(nombre) {
-  const filas = leer(nombre);
-  let max = 0;
-  filas.forEach(function (f) { max = Math.max(max, Number(f.id) || 0); });
-  return max + 1;
+function insertar(coleccion, datos) {
+  return ALMACEN.agregar(coleccion, datos);
 }
 
-function filaDe(nombre, datos, id) {
-  return columnas(nombre).map(function (col) {
-    return col === 'id' ? id : datos[col] === undefined || datos[col] === null ? '' : datos[col];
-  });
+/** Varias de una: las cuotas de una compra entran juntas. */
+function insertarVarios(coleccion, lista) {
+  return lista.map(function (datos) { return ALMACEN.agregar(coleccion, datos); });
 }
 
-function insertar(nombre, datos) {
-  return insertarVarios(nombre, [datos])[0];
+function actualizar(coleccion, id, cambios) {
+  return ALMACEN.cambiar(coleccion, id, cambios);
 }
 
-/** Varias filas de una sola escritura: seis cuotas cuestan lo mismo que una. */
-function insertarVarios(nombre, lista) {
-  if (!lista.length) return [];
-  const h = hoja(nombre);
-  const cols = columnas(nombre); // antes de leer: puede completar el encabezado
-  const filasActuales = leer(nombre);
-  let id = proximoId(nombre);
-  const ids = [];
-  const matriz = lista.map(function (datos) {
-    ids.push(id);
-    const fila = filaDe(nombre, datos, id);
-    id++;
-    return fila;
-  });
-  const desde = filasActuales.length ? filasActuales[filasActuales.length - 1]._fila + 1 : 2;
-  h.getRange(desde, 1, matriz.length, cols.length).setValues(matriz);
-  olvidar(nombre);
-  return ids;
+function borrar(coleccion, id) {
+  return ALMACEN.quitar(coleccion, id);
 }
 
-function actualizar(nombre, id, cambios) {
-  const cols = columnas(nombre); // antes de leer: puede completar el encabezado
-  const filas = leer(nombre);
-  const fila = filas.filter(function (f) { return Number(f.id) === Number(id); })[0];
-  if (!fila) return false;
-  const h = hoja(nombre);
-  // Una sola escritura con la fila entera en vez de una por columna
-  const actualizada = cols.map(function (col) {
-    const valor = cambios[col] !== undefined ? cambios[col] : fila[col];
-    return col === 'id' ? Number(fila.id) : valor === null || valor === undefined ? '' : valor;
-  });
-  h.getRange(fila._fila, 1, 1, cols.length).setValues([actualizada]);
-  olvidar(nombre);
-  return true;
-}
-
-function borrar(nombre, id) {
-  const filas = leer(nombre);
-  const fila = filas.filter(function (f) { return Number(f.id) === Number(id); })[0];
-  if (!fila) return false;
-  hoja(nombre).deleteRow(fila._fila);
-  olvidar(nombre);
-  return true;
-}
-
-function borrarDonde(nombre, condicion) {
-  const filas = leer(nombre).filter(condicion);
-  const h = hoja(nombre);
-  // de abajo hacia arriba, para que no se corran los números de fila
-  filas.sort(function (a, b) { return b._fila - a._fila; }).forEach(function (f) { h.deleteRow(f._fila); });
-  if (filas.length) olvidar(nombre);
+function borrarDonde(coleccion, condicion) {
+  const filas = leer(coleccion).filter(condicion);
+  filas.forEach(function (f) { ALMACEN.quitar(coleccion, f.id); });
   return filas.length;
 }
+
 
 const numero = function (v) {
   if (v === '' || v === null || v === undefined) return null;
@@ -274,12 +116,12 @@ function armarAnio(anio) {
     return indice[clave];
   };
 
-  leer('Categorias')
+  leer('categorias')
     .filter(function (c) { return Number(c.anio) === anio; })
     .sort(function (a, b) { return (Number(a.orden) || 0) - (Number(b.orden) || 0); })
     .forEach(function (c) { obtener(texto(c.seccion), texto(c.nombre)); });
 
-  leer('Celdas')
+  leer('celdas')
     .filter(function (c) { return Number(c.anio) === anio; })
     .forEach(function (c) {
       const cat = obtener(texto(c.seccion), texto(c.categoria));
@@ -287,7 +129,7 @@ function armarAnio(anio) {
     });
 
   const pendientes = [];
-  leer('Movimientos')
+  leer('movimientos')
     .filter(function (m) { return Number(m.anio) === anio; })
     .forEach(function (m) {
       const cat = obtener(texto(m.seccion), texto(m.categoria));
@@ -342,7 +184,7 @@ function movimientoApp(m) {
 
 function aniosCargados() {
   const anios = {};
-  ['Movimientos', 'Celdas', 'Categorias'].forEach(function (t) {
+  ['movimientos', 'celdas', 'categorias'].forEach(function (t) {
     leer(t).forEach(function (f) { if (f.anio) anios[Number(f.anio)] = true; });
   });
   const lista = Object.keys(anios).map(Number).sort();
@@ -367,9 +209,9 @@ function claveDeNombre(nombre) {
  * "Internet" de 2025 son lo mismo. Esto mira todos los años de una.
  */
 function revisarDatos() {
-  const categorias = leer('Categorias');
-  const celdas = leer('Celdas');
-  const movimientos = leer('Movimientos');
+  const categorias = leer('categorias');
+  const celdas = leer('celdas');
+  const movimientos = leer('movimientos');
 
   // Una entrada por categoría (sin importar el año), con dónde y cuánto se usa.
   const usos = {};
@@ -430,7 +272,7 @@ function revisarDatos() {
 
   const huerfanas = [];
   const sinUso = [];
-  leer('Subcategorias').forEach(function (s) {
+  leer('subcategorias').forEach(function (s) {
     const fila = { section: texto(s.seccion), category: texto(s.categoria), name: texto(s.nombre) };
     if (!existeCategoria[fila.section + '|' + fila.category]) huerfanas.push(fila);
     else if (!usadas[fila.section + '|' + fila.category + '|' + fila.name]) sinUso.push(fila);
@@ -459,14 +301,14 @@ function revisarDatos() {
 // ---------------------------------------------------------------- escritura
 
 function asegurarCategoria(anio, seccion, nombre) {
-  const existentes = leer('Categorias').filter(function (c) {
+  const existentes = leer('categorias').filter(function (c) {
     return Number(c.anio) === Number(anio) && texto(c.seccion) === seccion && texto(c.nombre) === nombre;
   });
   if (existentes.length) return;
-  const orden = leer('Categorias').filter(function (c) {
+  const orden = leer('categorias').filter(function (c) {
     return Number(c.anio) === Number(anio) && texto(c.seccion) === seccion;
   }).length;
-  insertar('Categorias', { anio: Number(anio), seccion: seccion, nombre: nombre, orden: orden });
+  insertar('categorias', { anio: Number(anio), seccion: seccion, nombre: nombre, orden: orden });
 }
 
 function normalizarMovimiento(datos, actual) {
@@ -519,24 +361,24 @@ function etiquetaDeSerie(descripcion, suscripcion, cuotas, numero) {
 
 function guardarSubcategoria(seccion, categoria, nombre) {
   if (!nombre) return;
-  const existe = leer('Subcategorias').some(function (s) {
+  const existe = leer('subcategorias').some(function (s) {
     return texto(s.seccion) === seccion && texto(s.categoria) === categoria && texto(s.nombre) === nombre;
   });
-  if (!existe) insertar('Subcategorias', { seccion: seccion, categoria: categoria, nombre: nombre });
+  if (!existe) insertar('subcategorias', { seccion: seccion, categoria: categoria, nombre: nombre });
 }
 
 function ponerCelda(anio, seccion, categoria, mes, monto) {
   asegurarCategoria(anio, seccion, categoria);
-  const actual = leer('Celdas').filter(function (c) {
+  const actual = leer('celdas').filter(function (c) {
     return Number(c.anio) === Number(anio) && texto(c.seccion) === seccion &&
       texto(c.categoria) === categoria && Number(c.mes) === Number(mes);
   })[0];
   if (monto === null || monto === undefined || monto === '') {
-    if (actual) borrar('Celdas', actual.id);
+    if (actual) borrar('celdas', actual.id);
     return;
   }
-  if (actual) actualizar('Celdas', actual.id, { monto: Number(monto) });
-  else insertar('Celdas', { anio: Number(anio), seccion: seccion, categoria: categoria, mes: Number(mes), monto: Number(monto) });
+  if (actual) actualizar('celdas', actual.id, { monto: Number(monto) });
+  else insertar('celdas', { anio: Number(anio), seccion: seccion, categoria: categoria, mes: Number(mes), monto: Number(monto) });
 }
 
 // ---------------------------------------------------------------- saneamiento
@@ -544,11 +386,11 @@ function ponerCelda(anio, seccion, categoria, mes, monto) {
 /** Deja una sola fila de Categorias por año: la fusión y los renombres viejos dejan dos. */
 function dedupCategorias(seccion, nombre) {
   const vistas = {};
-  leer('Categorias')
+  leer('categorias')
     .filter(function (c) { return texto(c.seccion) === seccion && texto(c.nombre) === nombre; })
     .forEach(function (c) {
       const anio = Number(c.anio);
-      if (vistas[anio]) borrar('Categorias', c.id);
+      if (vistas[anio]) borrar('categorias', c.id);
       else vistas[anio] = true;
     });
 }
@@ -565,7 +407,7 @@ function fusionarCategoria(seccion, desde, hacia) {
   if (!desde) throw new Error('Falta la categoría a fusionar');
   if (desde === hacia) return { ok: true, celdas: 0, movimientos: 0 };
 
-  const todas = leer('Celdas').filter(function (c) { return texto(c.seccion) === seccion; });
+  const todas = leer('celdas').filter(function (c) { return texto(c.seccion) === seccion; });
   const quedan = {};
   todas.filter(function (c) { return texto(c.categoria) === hacia; })
     .forEach(function (c) { quedan[Number(c.anio) + '|' + Number(c.mes)] = { id: c.id, monto: numero(c.monto) || 0 }; });
@@ -589,38 +431,38 @@ function fusionarCategoria(seccion, desde, hacia) {
 
   // Primero lo que cambia de valor, y recién al final los borrados: cada operación vuelve a
   // leer la pestaña, así que las filas que se corren no son problema.
-  sumar.forEach(function (d) { actualizar('Celdas', d.id, { monto: d.monto }); });
-  renombrar.forEach(function (id) { actualizar('Celdas', id, { categoria: hacia }); });
+  sumar.forEach(function (d) { actualizar('celdas', d.id, { monto: d.monto }); });
+  renombrar.forEach(function (id) { actualizar('celdas', id, { categoria: hacia }); });
 
-  const movimientos = leer('Movimientos')
+  const movimientos = leer('movimientos')
     .filter(function (mv) { return texto(mv.seccion) === seccion && texto(mv.categoria) === desde; });
-  movimientos.forEach(function (mv) { actualizar('Movimientos', mv.id, { categoria: hacia }); });
+  movimientos.forEach(function (mv) { actualizar('movimientos', mv.id, { categoria: hacia }); });
 
   const yaEstan = {};
-  leer('Subcategorias')
+  leer('subcategorias')
     .filter(function (s) { return texto(s.seccion) === seccion && texto(s.categoria) === hacia; })
     .forEach(function (s) { yaEstan[texto(s.nombre)] = true; });
   const subsDuplicadas = [];
-  leer('Subcategorias')
+  leer('subcategorias')
     .filter(function (s) { return texto(s.seccion) === seccion && texto(s.categoria) === desde; })
     .forEach(function (s) {
       if (yaEstan[texto(s.nombre)]) subsDuplicadas.push(s.id);
       else {
-        actualizar('Subcategorias', s.id, { categoria: hacia });
+        actualizar('subcategorias', s.id, { categoria: hacia });
         yaEstan[texto(s.nombre)] = true;
       }
     });
 
   // La categoría que queda tiene que existir en todos los años en los que existía la otra
   const anios = {};
-  leer('Categorias')
+  leer('categorias')
     .filter(function (c) { return texto(c.seccion) === seccion && texto(c.nombre) === desde; })
     .forEach(function (c) { anios[Number(c.anio)] = true; });
   Object.keys(anios).forEach(function (a) { asegurarCategoria(Number(a), seccion, hacia); });
 
-  sobran.forEach(function (id) { borrar('Celdas', id); });
-  subsDuplicadas.forEach(function (id) { borrar('Subcategorias', id); });
-  borrarDonde('Categorias', function (c) {
+  sobran.forEach(function (id) { borrar('celdas', id); });
+  subsDuplicadas.forEach(function (id) { borrar('subcategorias', id); });
+  borrarDonde('categorias', function (c) {
     return texto(c.seccion) === seccion && texto(c.nombre) === desde;
   });
   dedupCategorias(seccion, hacia);
@@ -634,28 +476,28 @@ function moverCategoriaDeSeccion(seccion, nombre, aSeccion) {
   if (!nombre) throw new Error('Falta la categoría');
   if (seccion === aSeccion) return { ok: true, celdas: 0, movimientos: 0 };
 
-  const celdas = leer('Celdas').filter(function (c) {
+  const celdas = leer('celdas').filter(function (c) {
     return texto(c.seccion) === seccion && texto(c.categoria) === nombre;
   });
-  celdas.forEach(function (c) { actualizar('Celdas', c.id, { seccion: aSeccion }); });
+  celdas.forEach(function (c) { actualizar('celdas', c.id, { seccion: aSeccion }); });
 
   // El tipo acompaña a la sección: lo que se va a ingresos deja de ser un gasto.
   const tipo = aSeccion === 'ingresos' ? 'ingreso' : 'gasto';
-  const movimientos = leer('Movimientos').filter(function (mv) {
+  const movimientos = leer('movimientos').filter(function (mv) {
     return texto(mv.seccion) === seccion && texto(mv.categoria) === nombre;
   });
-  movimientos.forEach(function (mv) { actualizar('Movimientos', mv.id, { seccion: aSeccion, tipo: tipo }); });
+  movimientos.forEach(function (mv) { actualizar('movimientos', mv.id, { seccion: aSeccion, tipo: tipo }); });
 
-  leer('Subcategorias')
+  leer('subcategorias')
     .filter(function (s) { return texto(s.seccion) === seccion && texto(s.categoria) === nombre; })
-    .forEach(function (s) { actualizar('Subcategorias', s.id, { seccion: aSeccion }); });
+    .forEach(function (s) { actualizar('subcategorias', s.id, { seccion: aSeccion }); });
 
   const anios = {};
-  leer('Categorias')
+  leer('categorias')
     .filter(function (c) { return texto(c.seccion) === seccion && texto(c.nombre) === nombre; })
     .forEach(function (c) { anios[Number(c.anio)] = true; });
   Object.keys(anios).forEach(function (a) { asegurarCategoria(Number(a), aSeccion, nombre); });
-  borrarDonde('Categorias', function (c) {
+  borrarDonde('categorias', function (c) {
     return texto(c.seccion) === seccion && texto(c.nombre) === nombre;
   });
   dedupCategorias(aSeccion, nombre);
@@ -688,7 +530,7 @@ function celdasAMovimientos(cuerpo) {
     });
   }
 
-  const celdas = leer('Celdas').filter(function (c) {
+  const celdas = leer('celdas').filter(function (c) {
     if (texto(c.seccion) !== seccion || texto(c.categoria) !== categoria) return false;
     return !hayFiltro || elegidas[Number(c.anio) + '|' + Number(c.mes)] !== undefined;
   });
@@ -710,8 +552,8 @@ function celdasAMovimientos(cuerpo) {
   nuevos.forEach(function (n) { anios[n.anio] = true; });
   Object.keys(anios).forEach(function (a) { asegurarCategoria(Number(a), aSeccion, aCategoria); });
   nuevos.forEach(function (n) { guardarSubcategoria(aSeccion, aCategoria, n.subcategoria); });
-  insertarVarios('Movimientos', nuevos);
-  celdas.forEach(function (c) { borrar('Celdas', c.id); });
+  insertarVarios('movimientos', nuevos);
+  celdas.forEach(function (c) { borrar('celdas', c.id); });
 
   return { ok: true, movimientos: nuevos.length };
 }
@@ -723,9 +565,6 @@ function celdasAMovimientos(cuerpo) {
  * interfaz es exactamente la misma en la PC y acá adentro.
  */
 function llamarApi(metodo, ruta, cuerpo) {
-  const candado = LockService.getDocumentLock();
-  candado.waitLock(20000);
-  olvidar();
   try {
     const cuerpoOk = cuerpo || {};
     const respuesta = despachar(metodo, ruta, cuerpoOk);
@@ -737,8 +576,6 @@ function llamarApi(metodo, ruta, cuerpo) {
     return JSON.stringify(respuesta);
   } catch (err) {
     return JSON.stringify({ error: err.message || String(err) });
-  } finally {
-    candado.releaseLock();
   }
 }
 
@@ -779,7 +616,7 @@ function despachar(metodo, ruta, cuerpo) {
   if (m && metodo === 'POST') {
     const desde = Number(cuerpo.copyFrom);
     const hasta = Number(m[1]);
-    leer('Categorias')
+    leer('categorias')
       .filter(function (c) { return Number(c.anio) === desde; })
       .forEach(function (c) { asegurarCategoria(hasta, texto(c.seccion), texto(c.nombre)); });
     return armarAnio(hasta);
@@ -801,7 +638,7 @@ function despachar(metodo, ruta, cuerpo) {
   }
 
   if (camino === '/api/subcategory' && metodo === 'DELETE') {
-    const borradas = borrarDonde('Subcategorias', function (s) {
+    const borradas = borrarDonde('subcategorias', function (s) {
       return texto(s.seccion) === texto(cuerpo.section) &&
         texto(s.categoria) === texto(cuerpo.category) &&
         (cuerpo.name === undefined || texto(s.nombre) === texto(cuerpo.name));
@@ -821,7 +658,7 @@ function despachar(metodo, ruta, cuerpo) {
       return { ok: true };
     }
     if (metodo === 'PATCH' && cuerpo.direction) {
-      const lista = leer('Categorias')
+      const lista = leer('categorias')
         .filter(function (c) { return Number(c.anio) === anio && texto(c.seccion) === seccion; })
         .sort(function (a, b) { return (Number(a.orden) || 0) - (Number(b.orden) || 0); });
       const i = lista.map(function (c) { return texto(c.nombre); }).indexOf(texto(cuerpo.name));
@@ -830,7 +667,7 @@ function despachar(metodo, ruta, cuerpo) {
         const tmp = lista[i];
         lista[i] = lista[j];
         lista[j] = tmp;
-        lista.forEach(function (c, idx) { actualizar('Categorias', c.id, { orden: idx }); });
+        lista.forEach(function (c, idx) { actualizar('categorias', c.id, { orden: idx }); });
       }
       return { ok: true };
     }
@@ -838,29 +675,29 @@ function despachar(metodo, ruta, cuerpo) {
       const desde = texto(cuerpo.from);
       const hacia = texto(cuerpo.to).trim();
       if (!hacia || desde === hacia) return { ok: true };
-      leer('Categorias')
+      leer('categorias')
         .filter(function (c) { return Number(c.anio) === anio && texto(c.seccion) === seccion && texto(c.nombre) === desde; })
-        .forEach(function (c) { actualizar('Categorias', c.id, { nombre: hacia }); });
-      leer('Celdas')
+        .forEach(function (c) { actualizar('categorias', c.id, { nombre: hacia }); });
+      leer('celdas')
         .filter(function (c) { return Number(c.anio) === anio && texto(c.seccion) === seccion && texto(c.categoria) === desde; })
-        .forEach(function (c) { actualizar('Celdas', c.id, { categoria: hacia }); });
-      leer('Movimientos')
+        .forEach(function (c) { actualizar('celdas', c.id, { categoria: hacia }); });
+      leer('movimientos')
         .filter(function (mv) { return Number(mv.anio) === anio && texto(mv.seccion) === seccion && texto(mv.categoria) === desde; })
-        .forEach(function (mv) { actualizar('Movimientos', mv.id, { categoria: hacia }); });
-      leer('Subcategorias')
+        .forEach(function (mv) { actualizar('movimientos', mv.id, { categoria: hacia }); });
+      leer('subcategorias')
         .filter(function (s) { return texto(s.seccion) === seccion && texto(s.categoria) === desde; })
-        .forEach(function (s) { actualizar('Subcategorias', s.id, { categoria: hacia }); });
+        .forEach(function (s) { actualizar('subcategorias', s.id, { categoria: hacia }); });
       return { ok: true };
     }
     if (metodo === 'DELETE') {
       const nombre = texto(cuerpo.name);
-      borrarDonde('Celdas', function (c) {
+      borrarDonde('celdas', function (c) {
         return Number(c.anio) === anio && texto(c.seccion) === seccion && texto(c.categoria) === nombre;
       });
-      borrarDonde('Movimientos', function (mv) {
+      borrarDonde('movimientos', function (mv) {
         return Number(mv.anio) === anio && texto(mv.seccion) === seccion && texto(mv.categoria) === nombre;
       });
-      borrarDonde('Categorias', function (c) {
+      borrarDonde('categorias', function (c) {
         return Number(c.anio) === anio && texto(c.seccion) === seccion && texto(c.nombre) === nombre;
       });
       return { ok: true };
@@ -870,7 +707,7 @@ function despachar(metodo, ruta, cuerpo) {
   if (camino === '/api/movements' && metodo === 'GET') {
     const anio = Number(params.year);
     const mes = Number(params.month);
-    let filas = leer('Movimientos').filter(function (mv) {
+    let filas = leer('movimientos').filter(function (mv) {
       return Number(mv.anio) === anio && Number(mv.mes) === mes;
     });
     if (params.section && params.category) {
@@ -901,29 +738,29 @@ function despachar(metodo, ruta, cuerpo) {
       cuotasAGuardar.push(cuota);
     }
     guardarSubcategoria(datos.seccion, datos.categoria, datos.subcategoria);
-    const ids = insertarVarios('Movimientos', cuotasAGuardar);
+    const ids = insertarVarios('movimientos', cuotasAGuardar);
     return { id: ids.length === 1 ? ids[0] : ids };
   }
 
   m = camino.match(/^\/api\/movements\/(\d+)$/);
   if (m && metodo === 'PUT') {
-    const actual = leer('Movimientos').filter(function (mv) { return Number(mv.id) === Number(m[1]); })[0];
+    const actual = leer('movimientos').filter(function (mv) { return Number(mv.id) === Number(m[1]); })[0];
     if (!actual) throw new Error('No existe el movimiento');
     const datos = normalizarMovimiento(cuerpo, actual);
     asegurarCategoria(datos.anio, datos.seccion, datos.categoria);
     guardarSubcategoria(datos.seccion, datos.categoria, datos.subcategoria);
-    actualizar('Movimientos', m[1], datos);
+    actualizar('movimientos', m[1], datos);
     return { ok: true };
   }
   if (m && metodo === 'DELETE') {
-    borrar('Movimientos', m[1]);
+    borrar('movimientos', m[1]);
     return { ok: true };
   }
 
   if (camino === '/api/catalog' && metodo === 'GET') {
     const catalogo = {};
     SECCIONES.forEach(function (s) { catalogo[s] = []; });
-    leer('Categorias').forEach(function (c) {
+    leer('categorias').forEach(function (c) {
       const s = texto(c.seccion);
       if (!catalogo[s]) catalogo[s] = [];
       if (catalogo[s].indexOf(texto(c.nombre)) < 0) catalogo[s].push(texto(c.nombre));
@@ -931,7 +768,7 @@ function despachar(metodo, ruta, cuerpo) {
     Object.keys(catalogo).forEach(function (s) { catalogo[s].sort(); });
     return {
       catalog: catalogo,
-      subcategories: leer('Subcategorias').map(function (s) {
+      subcategories: leer('subcategorias').map(function (s) {
         return { section: texto(s.seccion), category: texto(s.categoria), name: texto(s.nombre) };
       }),
     };
@@ -939,7 +776,7 @@ function despachar(metodo, ruta, cuerpo) {
 
   if (camino === '/api/subcategories' && metodo === 'GET') {
     return {
-      subcategories: leer('Subcategorias').map(function (s) {
+      subcategories: leer('subcategorias').map(function (s) {
         return { section: texto(s.seccion), category: texto(s.categoria), name: texto(s.nombre) };
       }),
     };
@@ -948,10 +785,10 @@ function despachar(metodo, ruta, cuerpo) {
   if (camino === '/api/revision' && metodo === 'GET') return revisarDatos();
 
   if (camino === '/api/vehicles' && metodo === 'GET') {
-    const services = leer('AutoServices');
-    const plan = leer('AutoPlan');
+    const services = leer('auto_services');
+    const plan = leer('auto_plan');
     return {
-      vehicles: leer('Auto').map(function (v) {
+      vehicles: leer('autos').map(function (v) {
         return {
           id: Number(v.id),
           marca: texto(v.marca), modelo: texto(v.modelo), anio: texto(v.anio), km: texto(v.km),
@@ -977,7 +814,7 @@ function despachar(metodo, ruta, cuerpo) {
   }
 
   if (camino === '/api/quinta' && metodo === 'GET') {
-    const items = leer('Quinta').sort(function (a, b) { return (Number(a.orden) || 0) - (Number(b.orden) || 0); });
+    const items = leer('quinta').sort(function (a, b) { return (Number(a.orden) || 0) - (Number(b.orden) || 0); });
     const rubros = [];
     const porRubro = {};
     items.forEach(function (it) {
@@ -990,7 +827,7 @@ function despachar(metodo, ruta, cuerpo) {
     });
     return {
       rubros: rubros,
-      todos: leer('QuintaPendientes')
+      todos: leer('quinta_pendientes')
         .sort(function (a, b) { return (Number(a.orden) || 0) - (Number(b.orden) || 0); })
         .map(function (t) {
           return { id: Number(t.id), zona: texto(t.zona), texto: texto(t.texto), hecho: bool(t.hecho) ? 1 : 0, position: Number(t.orden) || 0 };
@@ -1000,11 +837,11 @@ function despachar(metodo, ruta, cuerpo) {
 
   // Tablas simples del auto y la quinta
   const TABLA_DE_RUTA = {
-    vehicles: 'Auto',
-    services: 'AutoServices',
-    service_plan: 'AutoPlan',
-    quinta_items: 'Quinta',
-    quinta_todos: 'QuintaPendientes',
+    vehicles: 'autos',
+    services: 'auto_services',
+    service_plan: 'auto_plan',
+    quinta_items: 'quinta',
+    quinta_todos: 'quinta_pendientes',
   };
   const CAMPOS = {
     services: { vehicle_id: 'auto_id', position: 'orden' },
@@ -1022,9 +859,9 @@ function despachar(metodo, ruta, cuerpo) {
     if (metodo === 'POST') return { id: insertar(tabla, datos) };
     if (metodo === 'PUT') { actualizar(tabla, m[2], datos); return { ok: true }; }
     if (metodo === 'DELETE') {
-      if (tabla === 'Auto') {
-        borrarDonde('AutoServices', function (s) { return Number(s.auto_id) === Number(m[2]); });
-        borrarDonde('AutoPlan', function (p) { return Number(p.auto_id) === Number(m[2]); });
+      if (tabla === 'autos') {
+        borrarDonde('auto_services', function (s) { return Number(s.auto_id) === Number(m[2]); });
+        borrarDonde('auto_plan', function (p) { return Number(p.auto_id) === Number(m[2]); });
       }
       borrar(tabla, m[2]);
       return { ok: true };
