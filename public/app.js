@@ -57,13 +57,13 @@ const almacen = {
 };
 
 /** Cualquier falla se muestra en pantalla: quedarse en "Cargando…" no dice nada. */
-function mostrarFalla(mensaje, detalle) {
+function mostrarFalla(mensaje, detalle, titulo = 'No pude cargar los datos') {
   const app = document.getElementById('app');
   if (!app) return;
   const texto = String(mensaje === null || mensaje === undefined ? '' : mensaje).trim();
   app.replaceChildren(
     el('div', { class: 'falla' }, [
-      el('h2', { text: 'No pude cargar los datos' }),
+      el('h2', { text: titulo }),
       el('p', { text: texto || 'Error desconocido (mirá la consola del navegador)' }),
       detalle ? el('pre', { text: String(detalle).slice(0, 600) }) : null,
     ])
@@ -1284,6 +1284,26 @@ async function submitForm(event, keepOpen) {
 
 const sincro = { corriendo: false, pedidaDeNuevo: false, estado: 'listo', detalle: '' };
 
+/** Traduce los errores de permiso de Google a algo que diga qué hacer. */
+function mensajeDePermiso(mensaje) {
+  if (/access_denied|no ha completado|verificaci/i.test(mensaje)) {
+    return (
+      'Google bloqueó el acceso porque tu cuenta no figura como usuario de prueba. ' +
+      'Entrá a console.cloud.google.com → Pantalla de consentimiento de OAuth → Usuarios de prueba, ' +
+      'agregá tu cuenta y volvé a tocar Conectar.'
+    );
+  }
+  if (/origin|redirect_uri/i.test(mensaje)) {
+    return (
+      'Google rechazó la dirección desde la que estás entrando. En la credencial, ' +
+      'Orígenes autorizados de JavaScript tiene que incluir exactamente ' +
+      location.origin
+    );
+  }
+  if (/cliente|client/i.test(mensaje)) return 'Revisá el ID de cliente en el engranaje ⚙.';
+  return 'Tocá acá para conectar con tu cuenta de Google';
+}
+
 function pintarSincro() {
   if (MODO !== 'pwa') return;
   let chip = document.getElementById('sincro');
@@ -1358,9 +1378,7 @@ async function sincronizarConSheet({ forzar = false, bajar = false } = {}) {
     // si lo pedís vos tocando algo: por eso el chip pasa a decir "Conectar".
     const necesitaPermiso = /popup|consent|access_denied|interaction|permiso|token|entrar|cliente|librería/i.test(err.message);
     sincro.estado = necesitaPermiso ? 'sin-permiso' : 'error';
-    sincro.detalle = necesitaPermiso
-      ? 'Tocá acá para conectar con tu cuenta de Google'
-      : err.message;
+    sincro.detalle = necesitaPermiso ? mensajeDePermiso(err.message) : err.message;
   } finally {
     sincro.corriendo = false;
     pintarSincro();
@@ -1405,8 +1423,22 @@ function mostrarConfiguracion({ obligatoria = false } = {}) {
     sheetsApi.config.escribir(valores);
     document.getElementById('config')?.remove();
     await sincronizarConSheet({ forzar: true, bajar: true });
+
+    if (sincro.estado === 'sin-permiso' || sincro.estado === 'error') {
+      // El motivo real lo sabe la sincronización: mostrarlo tal cual, no uno inventado
+      mostrarFalla(
+        sincro.detalle,
+        '',
+        sincro.estado === 'sin-permiso' ? 'Google no dio el permiso' : 'No pude leer la planilla'
+      );
+      pintarSincro();
+      return;
+    }
     if (!almacenLocal.hayDatos()) {
-      mostrarFalla('No pude leer la planilla', 'Revisá que el ID sea el correcto y que la cuenta tenga acceso.');
+      mostrarFalla(
+        'La planilla no tiene las pestañas de la app',
+        'Revisá que el ID sea el de la planilla correcta. Las pestañas (Movimientos, Celdas, …) se crean al cargar los datos.'
+      );
     } else if (!state.data) {
       await arrancarInterfaz();
     }
