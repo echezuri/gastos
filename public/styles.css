@@ -1,3 +1,10 @@
+/* El atributo hidden tiene que ganar siempre. Sin esto cualquier regla con `display`
+   (`.field`, `.subtabs`…) lo pisa y el elemento se ve igual: así se estaba mostrando el
+   campo de cotización con la carga en pesos. */
+[hidden] {
+  display: none !important;
+}
+
 :root {
   --bg: #f6f5f2;
   --panel: #ffffff;
@@ -22,6 +29,9 @@
   --chart-income: #1baf7a;
   --chart-expense: #e34948;
   --chart-neutral: #2a78d6;
+  /* Tercer tono, para separar las tres secciones de gasto en un mismo gráfico. Ámbar:
+     se distingue del rojo y del azul también sin ver el color. */
+  --chart-warm: #d08c1c;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -45,6 +55,7 @@
     --chart-income: #199e70;
     --chart-expense: #e66767;
     --chart-neutral: #3987e5;
+    --chart-warm: #d99f36;
   }
 }
 
@@ -822,6 +833,48 @@ tfoot .col-label {
   font-size: 11.5px;
 }
 
+/* ---------- ranking en barras acostadas ---------- */
+
+.bar-label {
+  fill: var(--ink-soft);
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.bar-value {
+  fill: var(--ink);
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bar-hit {
+  fill: transparent;
+}
+
+.bar-row.is-clickable {
+  cursor: pointer;
+}
+
+.bar-row.is-clickable:hover .bar-hit,
+.bar-row:focus-visible .bar-hit {
+  fill: var(--accent-soft);
+}
+
+.bar-row:focus-visible {
+  outline: none;
+}
+
+.bar-row.is-selected .bar-hit {
+  fill: var(--accent-soft);
+}
+
+.bar-row.is-selected .bar-label {
+  fill: var(--ink);
+  font-weight: 600;
+}
+
 .chart-mark {
   transition: opacity 0.12s ease;
 }
@@ -1305,30 +1358,30 @@ tr.grupo-primero:first-child td {
   white-space: nowrap;
 }
 
-.note-row td {
-  background: var(--row-hover);
-  border-bottom: 1px solid var(--line);
-  padding: 0 10px 8px;
-}
+/* ---------- botón flotante (sólo teléfono) ---------- */
 
-.note-input {
-  width: 100%;
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
-  background: var(--panel);
-  color: inherit;
-  font: inherit;
-  font-size: 13.5px;
-  padding: 6px 9px;
-}
-
-.note-input:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+/* En pantalla grande el botón "+ Cargar" de la barra alcanza; el flotante taparía la
+   tabla. Se enciende recién en la consulta de abajo. */
+.fab {
+  display: none;
 }
 
 /* ---------- formulario ---------- */
+
+.form-mas {
+  width: 100%;
+  justify-content: center;
+  margin-bottom: 12px;
+}
+
+.form-mas.is-open {
+  margin-bottom: 8px;
+}
+
+.form-extras {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
 
 .form-dialog {
   border: 1px solid var(--line-strong);
@@ -1521,6 +1574,67 @@ tr.grupo-primero:first-child td {
   border-top: 1px solid var(--line);
 }
 
+/* ---------- modal chico (mover de sección, pasar celdas a movimientos) ---------- */
+
+.dialogo {
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--panel);
+  color: var(--ink);
+  padding: 20px;
+  width: min(420px, calc(100vw - 32px));
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+
+.dialogo::backdrop {
+  background: rgba(20, 20, 22, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.dialogo-titulo {
+  margin: 0 0 6px;
+  font-size: 15px;
+}
+
+.dialogo-hint {
+  margin: 0 0 14px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+}
+
+/* Si son muchos meses, scrollea el cuerpo y los botones quedan siempre a la vista */
+.dialogo-cuerpo {
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+}
+
+/* Un mes por fila: la etiqueta dice cuánto es, y al lado va su subcategoría */
+.field-fila {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.field-fila > span {
+  margin-bottom: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.dialogo-pie {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
 /* ---------- clave de acceso ---------- */
 
 .login {
@@ -1675,19 +1789,43 @@ tr.grupo-primero:first-child td {
     gap: 6px;
   }
 
-  /* el botón de cargar es lo que más se usa desde el teléfono */
-  #add-movement {
-    padding: 7px 16px;
-    font-size: 15px;
-  }
-
+  /* cargar se hace con el botón flotante: la barra de arriba queda para las solapas */
+  #add-movement,
   #new-year,
   .topbar-right a.btn {
     display: none;
   }
 
+  .fab {
+    display: grid;
+    place-items: center;
+    position: fixed;
+    right: 18px;
+    /* por encima de la barra de gestos del teléfono */
+    bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    z-index: 60;
+    width: 58px;
+    height: 58px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 30px;
+    line-height: 1;
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+    cursor: pointer;
+    /* que el pulgar no dispare el zoom por doble toque */
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .fab:active {
+    transform: scale(0.94);
+  }
+
   main {
-    padding: 12px 10px 90px;
+    padding: 12px 10px 96px;
   }
 
   .kpis {
@@ -1710,7 +1848,7 @@ tr.grupo-primero:first-child td {
   }
 
   .mov-table {
-    min-width: 620px;
+    min-width: 780px; /* entró la columna de descripción */
   }
 
   .col-label {

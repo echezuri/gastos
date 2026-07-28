@@ -12,7 +12,7 @@
     <meta name="apple-mobile-web-app-title" content="Gastos" />
     <link rel="apple-touch-icon" href="iconos/icono-192.png" />
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💸</text></svg>" />
-    <link rel="stylesheet" href="styles.css?v=ms40ahzf" />
+    <link rel="stylesheet" href="styles.css?v=ms420136" />
   </head>
   <body>
     <header class="topbar">
@@ -45,14 +45,18 @@
       <p class="loading">Cargando…</p>
     </main>
 
+    <!-- En el teléfono cargar es lo único que se hace de parado: el + queda siempre
+         al alcance del pulgar, y la barra de arriba le devuelve el lugar a las solapas -->
+    <button class="fab" id="fab-cargar" type="button" aria-label="Cargar un gasto o un ingreso">+</button>
+
     <div class="toast" id="toast" hidden></div>
 
     <script src="https://accounts.google.com/gsi/client" async defer></script>
-    <script src="config.js?v=ms40ahzf"></script>
-    <script src="almacen-local.js?v=ms40ahzf"></script>
-    <script src="sheets-api.js?v=ms40ahzf"></script>
-    <script src="logica.js?v=ms40ahzf"></script>
-    <script src="charts.js?v=ms40ahzf"></script>
-    <script src="app.js?v=ms40ahzf"></script>
+    <script src="config.js?v=ms420136"></script>
+    <script src="almacen-local.js?v=ms420136"></script>
+    <script src="sheets-api.js?v=ms420136"></script>
+    <script src="logica.js?v=ms420136"></script>
+    <script src="charts.js?v=ms420136"></script>
+    <script src="app.js?v=ms420136"></script>
   </body>
 </html>

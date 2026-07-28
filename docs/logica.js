@@ -242,6 +242,9 @@ function categoriaVacia(nombre) {
     moved: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     pending: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     tips: [[], [], [], [], [], [], [], [], [], [], [], []],
+    // Cuánto puso cada subcategoría en el año. Sale de los movimientos pagados: lo cargado
+    // a mano en la grilla es un monto suelto por mes y no tiene subcategoría.
+    subs: {},
   };
 }
 
@@ -295,6 +298,8 @@ function armarAnio(anio) {
       if (bool(m.pagado)) {
         cat.months[i] = (cat.months[i] || 0) + monto;
         cat.moved[i] += monto;
+        const sub = texto(m.subcategoria).trim() || 'Sin subcategoría';
+        cat.subs[sub] = (cat.subs[sub] || 0) + monto;
       } else {
         cat.pending[i] += monto;
         pendientes.push(movimientoApp(m));
@@ -534,6 +539,183 @@ function ponerCelda(anio, seccion, categoria, mes, monto) {
   else insertar('Celdas', { anio: Number(anio), seccion: seccion, categoria: categoria, mes: Number(mes), monto: Number(monto) });
 }
 
+// ---------------------------------------------------------------- saneamiento
+
+/** Deja una sola fila de Categorias por año: la fusión y los renombres viejos dejan dos. */
+function dedupCategorias(seccion, nombre) {
+  const vistas = {};
+  leer('Categorias')
+    .filter(function (c) { return texto(c.seccion) === seccion && texto(c.nombre) === nombre; })
+    .forEach(function (c) {
+      const anio = Number(c.anio);
+      if (vistas[anio]) borrar('Categorias', c.id);
+      else vistas[anio] = true;
+    });
+}
+
+/**
+ * Mete una categoría dentro de otra, en todos los años de una vez.
+ *
+ * Renombrar de a un año no alcanza: "INTERNET" vivió en 2022-2023 y "Internet" en
+ * 2023-2026, así que en 2023 conviven las dos y sus celdas del mismo mes hay que sumarlas
+ * en una sola. Los totales del mes no cambian.
+ */
+function fusionarCategoria(seccion, desde, hacia) {
+  if (!hacia) throw new Error('Falta el nombre de la categoría que queda');
+  if (!desde) throw new Error('Falta la categoría a fusionar');
+  if (desde === hacia) return { ok: true, celdas: 0, movimientos: 0 };
+
+  const todas = leer('Celdas').filter(function (c) { return texto(c.seccion) === seccion; });
+  const quedan = {};
+  todas.filter(function (c) { return texto(c.categoria) === hacia; })
+    .forEach(function (c) { quedan[Number(c.anio) + '|' + Number(c.mes)] = { id: c.id, monto: numero(c.monto) || 0 }; });
+
+  const sumar = [];
+  const renombrar = [];
+  const sobran = [];
+  todas.filter(function (c) { return texto(c.categoria) === desde; })
+    .forEach(function (c) {
+      const clave = Number(c.anio) + '|' + Number(c.mes);
+      const monto = numero(c.monto) || 0;
+      if (quedan[clave]) {
+        quedan[clave].monto += monto;
+        sumar.push(quedan[clave]);
+        sobran.push(c.id);
+      } else {
+        renombrar.push(c.id);
+        quedan[clave] = { id: c.id, monto: monto };
+      }
+    });
+
+  // Primero lo que cambia de valor, y recién al final los borrados: cada operación vuelve a
+  // leer la pestaña, así que las filas que se corren no son problema.
+  sumar.forEach(function (d) { actualizar('Celdas', d.id, { monto: d.monto }); });
+  renombrar.forEach(function (id) { actualizar('Celdas', id, { categoria: hacia }); });
+
+  const movimientos = leer('Movimientos')
+    .filter(function (mv) { return texto(mv.seccion) === seccion && texto(mv.categoria) === desde; });
+  movimientos.forEach(function (mv) { actualizar('Movimientos', mv.id, { categoria: hacia }); });
+
+  const yaEstan = {};
+  leer('Subcategorias')
+    .filter(function (s) { return texto(s.seccion) === seccion && texto(s.categoria) === hacia; })
+    .forEach(function (s) { yaEstan[texto(s.nombre)] = true; });
+  const subsDuplicadas = [];
+  leer('Subcategorias')
+    .filter(function (s) { return texto(s.seccion) === seccion && texto(s.categoria) === desde; })
+    .forEach(function (s) {
+      if (yaEstan[texto(s.nombre)]) subsDuplicadas.push(s.id);
+      else {
+        actualizar('Subcategorias', s.id, { categoria: hacia });
+        yaEstan[texto(s.nombre)] = true;
+      }
+    });
+
+  // La categoría que queda tiene que existir en todos los años en los que existía la otra
+  const anios = {};
+  leer('Categorias')
+    .filter(function (c) { return texto(c.seccion) === seccion && texto(c.nombre) === desde; })
+    .forEach(function (c) { anios[Number(c.anio)] = true; });
+  Object.keys(anios).forEach(function (a) { asegurarCategoria(Number(a), seccion, hacia); });
+
+  sobran.forEach(function (id) { borrar('Celdas', id); });
+  subsDuplicadas.forEach(function (id) { borrar('Subcategorias', id); });
+  borrarDonde('Categorias', function (c) {
+    return texto(c.seccion) === seccion && texto(c.nombre) === desde;
+  });
+  dedupCategorias(seccion, hacia);
+
+  return { ok: true, celdas: sumar.length + renombrar.length, movimientos: movimientos.length };
+}
+
+/** Pasa una categoría entera de sección, en todos los años. */
+function moverCategoriaDeSeccion(seccion, nombre, aSeccion) {
+  if (SECCIONES.indexOf(aSeccion) < 0) throw new Error('Sección inválida: ' + aSeccion);
+  if (!nombre) throw new Error('Falta la categoría');
+  if (seccion === aSeccion) return { ok: true, celdas: 0, movimientos: 0 };
+
+  const celdas = leer('Celdas').filter(function (c) {
+    return texto(c.seccion) === seccion && texto(c.categoria) === nombre;
+  });
+  celdas.forEach(function (c) { actualizar('Celdas', c.id, { seccion: aSeccion }); });
+
+  // El tipo acompaña a la sección: lo que se va a ingresos deja de ser un gasto.
+  const tipo = aSeccion === 'ingresos' ? 'ingreso' : 'gasto';
+  const movimientos = leer('Movimientos').filter(function (mv) {
+    return texto(mv.seccion) === seccion && texto(mv.categoria) === nombre;
+  });
+  movimientos.forEach(function (mv) { actualizar('Movimientos', mv.id, { seccion: aSeccion, tipo: tipo }); });
+
+  leer('Subcategorias')
+    .filter(function (s) { return texto(s.seccion) === seccion && texto(s.categoria) === nombre; })
+    .forEach(function (s) { actualizar('Subcategorias', s.id, { seccion: aSeccion }); });
+
+  const anios = {};
+  leer('Categorias')
+    .filter(function (c) { return texto(c.seccion) === seccion && texto(c.nombre) === nombre; })
+    .forEach(function (c) { anios[Number(c.anio)] = true; });
+  Object.keys(anios).forEach(function (a) { asegurarCategoria(Number(a), aSeccion, nombre); });
+  borrarDonde('Categorias', function (c) {
+    return texto(c.seccion) === seccion && texto(c.nombre) === nombre;
+  });
+  dedupCategorias(aSeccion, nombre);
+
+  return { ok: true, celdas: celdas.length, movimientos: movimientos.length };
+}
+
+/**
+ * Convierte celdas de la grilla en movimientos pagados, con subcategoría.
+ *
+ * Las celdas son un monto suelto por mes y no admiten subcategoría; los movimientos sí. Es
+ * la única forma de que un ingreso cargado a mano pueda decir si fue sueldo o aguinaldo.
+ * La celda que muestra la grilla es celda + movimientos pagados, así que el mes no cambia.
+ *
+ * `filas` deja poner una subcategoría distinta por mes; sin ella van todas con `subcategory`.
+ */
+function celdasAMovimientos(cuerpo) {
+  const seccion = texto(cuerpo.section);
+  const categoria = texto(cuerpo.category);
+  const aSeccion = texto(cuerpo.toSection) || seccion;
+  const aCategoria = texto(cuerpo.toCategory).trim() || categoria;
+  const porDefecto = texto(cuerpo.subcategory).trim();
+  if (SECCIONES.indexOf(aSeccion) < 0) throw new Error('Sección inválida: ' + aSeccion);
+
+  const elegidas = {};
+  const hayFiltro = Array.isArray(cuerpo.filas) && cuerpo.filas.length > 0;
+  if (hayFiltro) {
+    cuerpo.filas.forEach(function (f) {
+      elegidas[Number(f.year) + '|' + Number(f.month)] = texto(f.subcategory).trim();
+    });
+  }
+
+  const celdas = leer('Celdas').filter(function (c) {
+    if (texto(c.seccion) !== seccion || texto(c.categoria) !== categoria) return false;
+    return !hayFiltro || elegidas[Number(c.anio) + '|' + Number(c.mes)] !== undefined;
+  });
+  if (!celdas.length) return { ok: true, movimientos: 0 };
+
+  const nuevos = celdas.map(function (c) {
+    const clave = Number(c.anio) + '|' + Number(c.mes);
+    const sub = hayFiltro && elegidas[clave] ? elegidas[clave] : porDefecto;
+    return {
+      anio: Number(c.anio), mes: Number(c.mes), dia: '',
+      tipo: aSeccion === 'ingresos' ? 'ingreso' : 'gasto',
+      seccion: aSeccion, categoria: aCategoria, subcategoria: sub, descripcion: '',
+      moneda: 'ARS', monto_moneda: '', cotizacion: '',
+      monto: numero(c.monto) || 0, pagado: true,
+    };
+  });
+
+  const anios = {};
+  nuevos.forEach(function (n) { anios[n.anio] = true; });
+  Object.keys(anios).forEach(function (a) { asegurarCategoria(Number(a), aSeccion, aCategoria); });
+  nuevos.forEach(function (n) { guardarSubcategoria(aSeccion, aCategoria, n.subcategoria); });
+  insertarVarios('Movimientos', nuevos);
+  celdas.forEach(function (c) { borrar('Celdas', c.id); });
+
+  return { ok: true, movimientos: nuevos.length };
+}
+
 // ---------------------------------------------------------------- la API que usa la app
 
 /**
@@ -606,6 +788,29 @@ function despachar(metodo, ruta, cuerpo) {
   if (camino === '/api/cell' && metodo === 'PUT') {
     ponerCelda(cuerpo.year, cuerpo.section, cuerpo.category, cuerpo.month, cuerpo.amount);
     return { ok: true };
+  }
+
+  // ---- saneamiento: las tres operaciones van sobre todos los años de una vez ----
+
+  if (camino === '/api/category/merge' && metodo === 'POST') {
+    return fusionarCategoria(texto(cuerpo.section), texto(cuerpo.from), texto(cuerpo.to).trim());
+  }
+
+  if (camino === '/api/category/move' && metodo === 'POST') {
+    return moverCategoriaDeSeccion(texto(cuerpo.section), texto(cuerpo.name), texto(cuerpo.toSection));
+  }
+
+  if (camino === '/api/subcategory' && metodo === 'DELETE') {
+    const borradas = borrarDonde('Subcategorias', function (s) {
+      return texto(s.seccion) === texto(cuerpo.section) &&
+        texto(s.categoria) === texto(cuerpo.category) &&
+        (cuerpo.name === undefined || texto(s.nombre) === texto(cuerpo.name));
+    });
+    return { ok: true, borradas: borradas };
+  }
+
+  if (camino === '/api/cells-to-movements' && metodo === 'POST') {
+    return celdasAMovimientos(cuerpo);
   }
 
   if (camino === '/api/category') {

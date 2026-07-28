@@ -93,6 +93,7 @@ const state = {
   month: new Date().getMonth() + 1,
   filter: null, // { section, category } cuando mirás el detalle de una celda
   revision: null, // el informe de saneamiento; se pide sólo al abrir la solapa
+  desglose: null, // { section, name } de la categoría abierta en el ranking del resumen
 };
 
 // ---------------------------------------------------------------- utilidades
@@ -357,6 +358,29 @@ function renderSummary() {
       title: 'Resto por mes',
       note: 'ingresos − gasto',
     }),
+    // Lo que antes estaba repartido en cada sección, junto y comparable
+    chartColumns({
+      labels: MONTHS,
+      series: SECTIONS.filter((s) => s.key !== 'ingresos' && s.key !== 'ahorro').map((s, i) => ({
+        name: s.title,
+        color: TONOS_SECCION[i % TONOS_SECCION.length],
+        values: totals[s.key],
+      })),
+      width: 940,
+      height: 210,
+      title: 'Gasto por sección',
+      note: 'fijos, tarjetas y variables mes a mes',
+    }),
+    hayAhorro
+      ? chartColumns({
+          labels: MONTHS,
+          series: [{ name: 'Ahorros', color: CHART_COLORS.neutral, values: totals.ahorro }],
+          width: 460,
+          height: 210,
+          title: 'Ahorros por mes',
+          note: 'no suman al gasto',
+        })
+      : null,
   ]);
 
   return el('section', { class: 'panel' }, [
@@ -366,9 +390,70 @@ function renderSummary() {
       el('span', { class: 'spacer' }),
       el('span', { class: 'hint', text: 'clic en el nombre de la fila para ir a esa sección' }),
     ]),
-    charts,
     el('div', { class: 'scroll-x' }, [table]),
+    charts,
+    renderDesglose(),
   ]);
+}
+
+// Un tono por sección de gasto, para poder compararlas en un mismo gráfico.
+const TONOS_SECCION = ['var(--chart-expense)', 'var(--chart-neutral)', 'var(--chart-warm)'];
+
+/**
+ * Ranking de gasto por categoría y, al elegir una, por subcategoría.
+ *
+ * El desglose fino sale de los movimientos: lo que está cargado a mano en la grilla es un
+ * monto suelto por mes y no tiene subcategoría, así que aparece como "Sin subcategoría".
+ */
+function renderDesglose() {
+  const categorias = SECCIONES_DE_GASTO.flatMap((key) =>
+    categoriesOf(key).map((c) => ({ section: key, name: c.name, total: sum(c.months), subs: c.subs || {} }))
+  )
+    .filter((c) => c.total !== 0)
+    .sort((a, b) => Math.abs(b.total) - Math.abs(a.total));
+
+  if (!categorias.length) return null;
+
+  const elegida = categorias.findIndex(
+    (c) => state.desglose && c.section === state.desglose.section && c.name === state.desglose.name
+  );
+
+  const graficos = [
+    chartBars({
+      items: categorias.map((c) => ({ label: c.name, value: c.total })),
+      width: 470,
+      title: `Gasto por categoría · ${state.year}`,
+      note: 'clic para abrir sus subcategorías',
+      selected: elegida >= 0 ? elegida : null,
+      onSelect: (i, item) => {
+        const igual = state.desglose && state.desglose.name === item.label;
+        state.desglose = igual ? null : { section: categorias[i].section, name: categorias[i].name };
+        renderYear();
+      },
+    }),
+  ];
+
+  const foco = elegida >= 0 ? categorias[elegida] : null;
+  if (foco) {
+    const subs = Object.keys(foco.subs)
+      .map((name) => ({ label: name, value: foco.subs[name] }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+    // Lo que no salió de un movimiento no está en subs: se muestra como el resto de la celda
+    const enMovimientos = subs.reduce((t, s) => t + s.value, 0);
+    const enGrilla = foco.total - enMovimientos;
+    if (Math.round(enGrilla) !== 0) subs.push({ label: 'Cargado en la grilla', value: enGrilla });
+
+    graficos.push(
+      chartBars({
+        items: subs.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
+        width: 470,
+        title: `${foco.name} por subcategoría`,
+        note: subs.length ? 'clic de nuevo en la categoría para cerrar' : 'esta categoría no tiene subcategorías',
+      })
+    );
+  }
+
+  return el('div', { class: 'chart-grid' }, graficos);
 }
 
 function findCategory(section, name) {
@@ -479,6 +564,8 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
               ordenarPorMonto
                 ? null
                 : el('button', { class: 'icon-btn', title: 'Bajar', text: '↓', onclick: () => moveCategory(key, cat.name, 'down') }),
+              el('button', { class: 'icon-btn', title: 'Mover a otra sección', text: '⇄', onclick: () => moveCategoryToSection(key, cat.name) }),
+              el('button', { class: 'icon-btn', title: 'Pasar los montos de la grilla a movimientos', text: '⇣', onclick: () => cellsToMovements(key, cat.name) }),
               el('button', { class: 'icon-btn danger', title: 'Borrar categoría', text: '✕', onclick: () => removeCategory(key, cat.name) }),
             ]),
           ]),
@@ -531,14 +618,11 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
   ]);
 }
 
-/** Números y gráficos de una sección: por mes y ranking de categorías. */
+/** Los números de una sección. Los gráficos están todos en Resumen. */
 function sectionInsights(key, title) {
   const cats = categoriesOf(key);
   const totals = sectionTotals(key);
   const yearTotal = sum(totals);
-  // El ahorro no es gasto: va en el color neutro, no en el rojo de los gastos.
-  const color =
-    key === 'ingresos' ? CHART_COLORS.income : key === 'ahorro' ? CHART_COLORS.neutral : CHART_COLORS.expense;
   const withData = totals.filter((t) => t !== 0);
   const peak = totals.indexOf(Math.max(...totals));
 
@@ -546,9 +630,6 @@ function sectionInsights(key, title) {
     .map((c) => ({ label: c.name, value: sum(c.months) }))
     .filter((r) => r.value !== 0)
     .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
-
-  let running = 0;
-  const acumulado = totals.map((t) => (running += t));
 
   const stats = statRow([
     { label: 'Total del año', value: money(yearTotal) },
@@ -561,30 +642,9 @@ function sectionInsights(key, title) {
     ranking.length ? { label: 'Categoría más alta', value: ranking[0].label, sub: money(ranking[0].value) } : null,
   ]);
 
-  if (!yearTotal) return stats;
-
-  return el('div', { class: 'insights' }, [
-    stats,
-    el('div', { class: 'chart-grid' }, [
-      chartColumns({
-        labels: MONTHS,
-        series: [{ name: title, color, values: totals }],
-        width: 940,
-        height: 210,
-        title: 'Por mes',
-        note: 'la etiqueta marca el mes más alto',
-      }),
-      chartLine({
-        labels: MONTHS,
-        values: acumulado,
-        color,
-        width: 460,
-        height: 210,
-        title: 'Acumulado del año',
-        valueName: 'Acumulado',
-      }),
-    ]),
-  ]);
+  // Los gráficos viven todos en Resumen: acá quedan los números, que son los que se miran
+  // sin levantar la vista de la tabla.
+  return stats;
 }
 
 function categoryNameInput(section, name) {
@@ -611,6 +671,93 @@ function categoryNameInput(section, name) {
 async function moveCategory(section, name, direction) {
   try {
     await apiMutar('PATCH', '/api/category', { year: state.year, section, name, direction });
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/**
+ * Un modal chico para lo que no se resuelve con un confirm(): elegir una sección, repartir
+ * subcategorías. Devuelve lo que arme `leer()`, o null si cancelaste.
+ */
+function dialogo({ titulo, hint, contenido, aceptar = 'Aplicar', leer = () => true }) {
+  return new Promise((resolve) => {
+    const dlg = el('dialog', { class: 'dialogo' }, [
+      el('form', { method: 'dialog' }, [
+        el('h2', { class: 'dialogo-titulo', text: titulo }),
+        hint ? el('p', { class: 'dialogo-hint', text: hint }) : null,
+        el('div', { class: 'dialogo-cuerpo' }, contenido),
+        el('div', { class: 'dialogo-pie' }, [
+          el('button', { class: 'btn btn-ghost', type: 'button', text: 'Cancelar', onclick: () => { dlg.close(); resolve(null); } }),
+          el('button', { class: 'btn btn-accent', type: 'button', text: aceptar, onclick: () => { const v = leer(); dlg.close(); resolve(v); } }),
+        ]),
+      ]),
+    ]);
+    dlg.addEventListener('close', () => dlg.remove());
+    dlg.addEventListener('cancel', () => resolve(null));
+    document.body.append(dlg);
+    dlg.showModal();
+  });
+}
+
+async function moveCategoryToSection(section, name) {
+  const opciones = SECTIONS.filter((s) => s.key !== section);
+  const select = el('select', { class: 'field-input' }, opciones.map((s) => el('option', { value: s.key, text: s.title })));
+  const elegida = await dialogo({
+    titulo: `Mover "${name}"`,
+    hint: 'Se lleva sus celdas y movimientos, de todos los años. Los totales de cada sección cambian.',
+    contenido: [el('label', { class: 'field' }, [el('span', { text: 'A la sección' }), select])],
+    aceptar: 'Mover',
+    leer: () => select.value,
+  });
+  if (!elegida) return;
+  try {
+    await apiMutar('POST', '/api/category/move', { section, name, toSection: elegida });
+    toast('Movida');
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/** Pasa las celdas de una categoría a movimientos, con una subcategoría por mes. */
+async function cellsToMovements(section, category) {
+  const cat = findCategory(section, category);
+  const meses = MONTHS.map((_, i) => i).filter((i) => cat && cat.base[i] !== null && cat.base[i] !== 0);
+  if (!meses.length) {
+    toast('Esta categoría no tiene montos cargados a mano en este año', true);
+    return;
+  }
+  const porDefecto = el('input', { class: 'field-input', type: 'text', placeholder: 'Sueldo' });
+  const campos = meses.map((i) =>
+    el('label', { class: 'field field-fila' }, [
+      el('span', { text: `${MONTHS[i]} · ${money(cat.base[i])}` }),
+      el('input', { class: 'field-input', type: 'text', dataset: { mes: String(i + 1) }, placeholder: 'igual que arriba' }),
+    ])
+  );
+  const plan = await dialogo({
+    titulo: `Pasar "${category}" a movimientos`,
+    hint: `${state.year}: ${meses.length} mes(es). El total de cada mes no cambia; lo que gana es que ahora podés etiquetar cada uno.`,
+    contenido: [
+      el('label', { class: 'field' }, [el('span', { text: 'Subcategoría para todos' }), porDefecto]),
+      ...campos,
+    ],
+    aceptar: 'Convertir',
+    leer: () => ({
+      subcategory: porDefecto.value.trim(),
+      filas: campos.map((f) => {
+        const input = f.querySelector('input');
+        return { year: state.year, month: Number(input.dataset.mes), subcategory: input.value.trim() };
+      }),
+    }),
+  });
+  if (!plan) return;
+  if (!plan.subcategory && plan.filas.every((f) => !f.subcategory)) {
+    toast('Poné al menos una subcategoría', true);
+    return;
+  }
+  try {
+    const r = await apiMutar('POST', '/api/cells-to-movements', { section, category, ...plan });
+    toast(`${r.movimientos} movimiento(s)`);
   } catch (err) {
     toast(err.message, true);
   }
@@ -697,6 +844,37 @@ async function cargarRevision() {
   }
 }
 
+/** Mete todas las variantes de un grupo adentro de la que elegiste. */
+async function fusionarGrupo(grupo, gana) {
+  const pierden = grupo.options.filter((o) => o !== gana);
+  const otras = pierden.map((o) => `"${o.name}"`).join(' y ');
+  if (!confirm(`¿Fusionar ${otras} adentro de "${gana.name}"?\n\nSe llevan sus celdas y movimientos de todos los años. Los totales de cada mes no cambian.`)) return;
+  try {
+    for (const o of pierden) {
+      // Si quedó en otra sección, primero se acomoda: la fusión trabaja adentro de una sola
+      if (o.section !== gana.section) {
+        await api('POST', '/api/category/move', { section: o.section, name: o.name, toSection: gana.section });
+      }
+      await api('POST', '/api/category/merge', { section: gana.section, from: o.name, to: gana.name });
+    }
+    await refreshAll();
+    toast(`Quedó "${gana.name}"`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function borrarSubcategorias(section, category, name) {
+  const que = name ? `la subcategoría "${name}"` : `las ${'subcategorías'} de "${category}"`;
+  if (!confirm(`¿Borrar ${que}?\n\nSólo se va del catálogo: los movimientos no se tocan.`)) return;
+  try {
+    const r = await apiMutar('DELETE', '/api/subcategory', { section, category, name });
+    toast(`${r.borradas} borrada(s)`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 function bloqueRevision(titulo, pista, filas, { tono = '' } = {}) {
   if (!filas.length) return null;
   return el('section', { class: `panel ${tono}`.trim() }, [
@@ -733,6 +911,18 @@ function renderRevision() {
             el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: o.years.join(', ') })]),
             el('td', { class: 'num', text: `${o.celdas + o.movs} uso(s)` }),
             amountCell(o.total),
+            el('td', { class: 'num' }, [
+              // Fusionar el resto del grupo adentro de esta: se elige la que queda, no la
+              // que se va, que es como uno lo piensa.
+              grupo.options.length > 1
+                ? el('button', {
+                    class: 'btn btn-small',
+                    text: 'Dejar sólo esta',
+                    title: `Fusionar ${grupo.options.filter((x) => x !== o).map((x) => `"${x.name}"`).join(' y ')} adentro de "${o.name}"`,
+                    onclick: () => fusionarGrupo(grupo, o),
+                  })
+                : null,
+            ]),
           ])
         )
       )
@@ -758,6 +948,13 @@ function renderRevision() {
             el('span', { class: 'plain-label has-note', text: nombres.slice(0, 4).join(', ') + (nombres.length > 4 ? '…' : '') }),
           ]),
           el('td', { class: 'num', text: `${nombres.length}` }),
+          el('td', { class: 'num' }, [
+            el('button', {
+              class: 'btn btn-small',
+              text: 'Borrar todas',
+              onclick: () => borrarSubcategorias(k.split('|')[0], k.split('|')[1]),
+            }),
+          ]),
         ]);
       })
     )
@@ -772,6 +969,9 @@ function renderRevision() {
           el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: s.section })]),
           el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: s.category })]),
           el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: s.name })]),
+          el('td', { class: 'num' }, [
+            el('button', { class: 'btn btn-small', text: 'Borrar', onclick: () => borrarSubcategorias(s.section, s.category, s.name) }),
+          ]),
         ])
       )
     )
@@ -786,6 +986,24 @@ function renderRevision() {
           el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: v.section })]),
           el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.name })]),
           el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.years.join(', ') })]),
+          el('td', { class: 'num' }, [
+            // No tiene nada adentro: se puede borrar sin preguntar por los movimientos
+            el('button', {
+              class: 'btn btn-small',
+              text: 'Borrar',
+              onclick: async () => {
+                try {
+                  for (const anio of v.years) {
+                    await api('DELETE', '/api/category', { year: anio, section: v.section, name: v.name });
+                  }
+                  await refreshAll();
+                  toast('Borrada');
+                } catch (err) {
+                  toast(err.message, true);
+                }
+              },
+            }),
+          ]),
         ])
       )
     )
@@ -868,35 +1086,26 @@ function renderMovements() {
     });
 
     const sub = el('input', {
-      class: 'desc-input' + (mov.description ? ' has-note' : ''),
+      class: 'desc-input',
       type: 'text',
       value: mov.subcategory,
       placeholder: 'subcategoría',
-      title: mov.description || '',
     });
     sub.addEventListener('blur', () => saveMovement(mov, { subcategory: sub.value.trim() }));
 
-    const noteRow = el('tr', { class: 'note-row', hidden: true }, [
-      el('td', {}),
-      el('td', { colspan: '5' }, [
-        (() => {
-          const note = el('input', {
-            class: 'note-input',
-            type: 'text',
-            value: mov.description,
-            placeholder: 'descripción — se ve al pasar el mouse por encima',
-          });
-          note.addEventListener('blur', () => {
-            if (note.value.trim() === mov.description) return;
-            saveMovement(mov, { description: note.value.trim() });
-          });
-          note.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') note.blur();
-          });
-          return note;
-        })(),
-      ]),
-    ]);
+    // La descripción es una columna más: antes estaba escondida detrás de un ✎ y sólo se
+    // veía pasando el mouse, que en el teléfono no existe.
+    const note = el('input', {
+      class: 'desc-input',
+      type: 'text',
+      value: mov.description,
+      placeholder: '—',
+      title: mov.description || '',
+    });
+    note.addEventListener('blur', () => {
+      if (note.value.trim() === mov.description) return;
+      saveMovement(mov, { description: note.value.trim() });
+    });
 
     const amount = el('input', { class: 'cell-input', type: 'text', inputmode: 'decimal', value: money(mov.amount) });
     amount.addEventListener('focus', () => {
@@ -915,28 +1124,20 @@ function renderMovements() {
     const paid = el('input', { type: 'checkbox', checked: mov.paid ? true : false, title: 'Pagado' });
     paid.addEventListener('change', () => saveMovement(mov, { paid: paid.checked }));
 
-    for (const input of [day, sub, amount]) {
+    for (const input of [day, sub, note, amount]) {
       input.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') input.blur();
       });
     }
 
-    const row = el('tr', { class: mov.paid ? '' : 'is-pending', title: mov.description || '' }, [
+    return el('tr', { class: mov.paid ? '' : 'is-pending' }, [
       el('td', {}, [day]),
       el('td', { style: 'text-align:left' }, [category]),
       el('td', { style: 'text-align:left' }, [sub]),
+      el('td', { style: 'text-align:left' }, [note]),
       el('td', {}, [amount]),
       el('td', { class: 'num' }, [paid]),
       el('td', { class: 'num actions-cell' }, [
-        el('button', {
-          class: 'icon-btn' + (mov.description ? ' is-on' : ''),
-          text: '✎',
-          title: mov.description ? `Nota: ${mov.description}` : 'Agregar descripción',
-          onclick: () => {
-            noteRow.hidden = !noteRow.hidden;
-            if (!noteRow.hidden) noteRow.querySelector('.note-input').focus();
-          },
-        }),
         el('button', {
           class: 'icon-btn danger',
           text: '✕',
@@ -947,8 +1148,6 @@ function renderMovements() {
         }),
       ]),
     ]);
-
-    return [row, noteRow];
   });
 
   const head = [
@@ -1023,12 +1222,13 @@ function renderMovements() {
                 el('th', { text: 'Día' }),
                 el('th', { style: 'text-align:left', text: 'Categoría' }),
                 el('th', { style: 'text-align:left', text: 'Subcategoría' }),
+                el('th', { style: 'text-align:left', text: 'Descripción' }),
                 el('th', { text: 'Importe' }),
                 el('th', { text: 'Pago' }),
                 el('th', { text: '' }),
               ]),
             ]),
-            el('tbody', {}, rows.flat()),
+            el('tbody', {}, rows),
             el('tfoot', {}, [
               el('tr', {}, [
                 el('td', { class: 'col-label', text: 'Total' }),
@@ -1036,6 +1236,7 @@ function renderMovements() {
                 el('td', { style: 'text-align:left' }, [
                   pendingTotal ? el('span', { class: 'hint', text: `+ ${money(pendingTotal)} sin pagar` }) : null,
                 ]),
+                el('td', {}),
                 amountCell(total),
                 el('td', {}),
                 el('td', {}),
@@ -1047,7 +1248,7 @@ function renderMovements() {
   ]);
 }
 
-/** Números y gráfico del mes que estás mirando en Movimientos. */
+/** Los números del mes que estás mirando en Movimientos. */
 function movementInsights(list, month) {
   if (!list.length) return null;
   const paid = list.filter((m) => m.paid);
@@ -1055,52 +1256,14 @@ function movementInsights(list, month) {
   const pending = list.filter((m) => !m.paid);
   const biggest = [...list].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
 
-  // Lo cargado por formulario, mes a mes en todo el año: para ver dónde cae este mes.
-  const porMes = MONTHS.map((_, m) =>
-    sum(SECCIONES_DE_GASTO.flatMap((key) => categoriesOf(key).map((c) => c.moved[m])))
-  );
-  const cantidad = MONTHS.map((_, m) =>
-    sum(SECCIONES_DE_GASTO.flatMap((key) => categoriesOf(key).map((c) => c.moves[m])))
-  );
-
-  return el('div', { class: 'insights' }, [
-    statRow([
-      { label: `Total ${MONTHS[month - 1]}`, value: money(total), sub: `${paid.length} movimiento(s)` },
-      { label: 'Promedio', value: money(paid.length ? Math.round(total / paid.length) : 0) },
-      biggest ? { label: 'El más grande', value: money(biggest.amount), sub: biggest.subcategory || biggest.category } : null,
-      pending.length
-        ? { label: 'Sin pagar', value: money(sum(pending.map((m) => m.amount))), sub: `${pending.length} movimiento(s)`, tone: 'pending' }
-        : null,
-    ]),
-    el('div', { class: 'chart-grid' }, [
-      chartColumns({
-        labels: MONTHS,
-        series: [{ name: 'Cargado', color: CHART_COLORS.expense, values: porMes }],
-        width: 940,
-        height: 210,
-        selected: month - 1,
-        onSelect: async (i) => {
-          state.month = i + 1;
-          await refreshMovements();
-        },
-        title: 'Movimientos por mes',
-        note: 'clic en una barra para ir a ese mes',
-      }),
-      chartColumns({
-        labels: MONTHS,
-        series: [{ name: 'Cantidad', color: CHART_COLORS.neutral, values: cantidad }],
-        width: 460,
-        height: 210,
-        format: (n) => `${Math.round(n)} movimiento(s)`,
-        shortFormat: (n) => String(Math.round(n)),
-        selected: month - 1,
-        onSelect: async (i) => {
-          state.month = i + 1;
-          await refreshMovements();
-        },
-        title: 'Cuántos por mes',
-      }),
-    ]),
+  // Los gráficos viven todos en Resumen: acá quedan los números del mes que estás mirando.
+  return statRow([
+    { label: `Total ${MONTHS[month - 1]}`, value: money(total), sub: `${paid.length} movimiento(s)` },
+    { label: 'Promedio', value: money(paid.length ? Math.round(total / paid.length) : 0) },
+    biggest ? { label: 'El más grande', value: money(biggest.amount), sub: biggest.subcategory || biggest.category } : null,
+    pending.length
+      ? { label: 'Sin pagar', value: money(sum(pending.map((m) => m.amount))), sub: `${pending.length} movimiento(s)`, tone: 'pending' }
+      : null,
   ]);
 }
 
@@ -1159,6 +1322,16 @@ const form = {
   dialog: null,
 };
 
+/** Abre o cierra la parte de abajo del formulario (subcategoría, cuotas, dólares…). */
+function mostrarMasOpciones(abrir) {
+  const extras = form.dialog.querySelector('#form-extras');
+  const boton = form.dialog.querySelector('#form-mas');
+  extras.hidden = !abrir;
+  boton.textContent = abrir ? 'Menos opciones' : 'Más opciones';
+  boton.classList.toggle('is-open', abrir);
+  if (abrir) form.dialog.querySelector('#f-sub').focus();
+}
+
 function buildForm() {
   const amount = el('input', { id: 'f-amount', class: 'field-input', type: 'text', inputmode: 'decimal', placeholder: '0', autocomplete: 'off' });
   const category = el('select', { id: 'f-category', class: 'field-input' });
@@ -1213,19 +1386,14 @@ function buildForm() {
 
   category.addEventListener('change', refreshSubcategoryList);
 
-  const formEl = el('form', { method: 'dialog', onsubmit: (e) => submitForm(e, false) }, [
-    el('div', { class: 'kind-toggle' }, kindButtons),
+  // Lo que se usa en casi todas las cargas queda a la vista; el resto se abre solo si lo
+  // pedís. Casi siempre alcanza con monto, categoría y fecha.
+  const extras = el('div', { class: 'form-extras', id: 'form-extras', hidden: true }, [
     el('div', { class: 'moneda-toggle' }, monedaBotones),
-    el('label', { class: 'field' }, [el('span', { text: 'Monto' }), amount]),
     el('label', { class: 'field', id: 'campo-cotizacion', hidden: true }, [
       el('span', { text: 'Cotización del dólar' }),
       cotizacion,
       el('small', { class: 'field-hint', id: 'f-rate-info' }),
-    ]),
-    el('label', { class: 'field' }, [
-      el('span', { text: 'Categoría' }),
-      category,
-      el('small', { class: 'field-hint', text: 'las marcadas con · son de otros años; se agregan a este al guardar' }),
     ]),
     el('label', { class: 'field' }, [el('span', { text: 'Subcategoría' }), subcategory, subList]),
     el('label', { class: 'field' }, [el('span', { text: 'Descripción' }), description]),
@@ -1234,10 +1402,30 @@ function buildForm() {
       el('label', { class: 'check' }, [suscripcion, el('span', { text: 'Suscripción' })]),
     ]),
     resumenSerie,
+  ]);
+
+  const verMas = el('button', {
+    type: 'button',
+    class: 'btn btn-ghost form-mas',
+    id: 'form-mas',
+    text: 'Más opciones',
+    onclick: () => mostrarMasOpciones(extras.hidden),
+  });
+
+  const formEl = el('form', { method: 'dialog', onsubmit: (e) => submitForm(e, false) }, [
+    el('div', { class: 'kind-toggle' }, kindButtons),
+    el('label', { class: 'field' }, [el('span', { text: 'Monto' }), amount]),
+    el('label', { class: 'field' }, [
+      el('span', { text: 'Categoría' }),
+      category,
+      el('small', { class: 'field-hint', text: 'las marcadas con · son de otros años; se agregan a este al guardar' }),
+    ]),
     el('div', { class: 'field field-row' }, [
       el('label', { class: 'check' }, [paid, el('span', { text: 'Pagado' })]),
       el('label', { class: 'check date-field' }, [el('span', { text: 'Fecha' }), date]),
     ]),
+    verMas,
+    extras,
     el('footer', { class: 'form-actions' }, [
       el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancelar', onclick: () => form.dialog.close() }),
       el('span', { class: 'spacer' }),
@@ -1318,6 +1506,7 @@ function openForm(kind = 'gasto') {
   dialog.querySelector('#f-susc').checked = false;
   dialog.querySelector('#f-serie-info').textContent = '';
   setFormMoneda('ARS');
+  mostrarMasOpciones(false); // cada carga arranca simple
   dialog.showModal();
   dialog.querySelector('#f-amount').focus();
 }
@@ -1840,6 +2029,55 @@ function renderSubtabs() {
         ]
       )
     )
+  );
+}
+
+/**
+ * Deslizar el dedo a los costados cambia de solapa, como en cualquier app del teléfono.
+ *
+ * Sólo cuenta si el gesto fue claramente horizontal: si no, se lleva puesto el scroll de
+ * la página y el de las tablas anchas, que también se mueven con el dedo.
+ */
+function activarSwipe() {
+  const MINIMO = 60; // px de recorrido para que cuente
+  let x0 = null;
+  let y0 = null;
+  let dentroDeTabla = false;
+
+  document.addEventListener(
+    'touchstart',
+    (e) => {
+      if (e.touches.length !== 1) {
+        x0 = null;
+        return;
+      }
+      const t = e.touches[0];
+      x0 = t.clientX;
+      y0 = t.clientY;
+      // Una tabla que scrollea a lo ancho se queda con el gesto
+      const scroller = e.target.closest?.('.scroll-x, .months, .dialogo-cuerpo');
+      dentroDeTabla = Boolean(scroller && scroller.scrollWidth > scroller.clientWidth + 4);
+    },
+    { passive: true }
+  );
+
+  document.addEventListener(
+    'touchend',
+    (e) => {
+      if (x0 === null || dentroDeTabla || document.querySelector('dialog[open]')) return;
+      const t = e.changedTouches[0];
+      const dx = t.clientX - x0;
+      const dy = t.clientY - y0;
+      x0 = null;
+      if (Math.abs(dx) < MINIMO || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+
+      const solapas = (TABS[state.view] ? TABS[state.view]() : []).map((s) => s.key);
+      const i = solapas.indexOf(state.tabs[state.view]);
+      const j = i + (dx < 0 ? 1 : -1);
+      if (i < 0 || j < 0 || j >= solapas.length) return;
+      setTab(solapas[j]);
+    },
+    { passive: true }
   );
 }
 
@@ -2390,6 +2628,7 @@ async function setView(view) {
   document.querySelector('.year-picker').style.visibility = yearOnly ? 'visible' : 'hidden';
   document.getElementById('new-year').style.visibility = yearOnly ? 'visible' : 'hidden';
   document.getElementById('add-movement').style.visibility = yearOnly ? 'visible' : 'hidden';
+  document.getElementById('fab-cargar').hidden = !yearOnly;
 
   renderSubtabs();
   if (view === 'anio') {
@@ -2443,6 +2682,8 @@ async function init() {
   });
 
   document.getElementById('add-movement').addEventListener('click', () => openForm('gasto'));
+  document.getElementById('fab-cargar').addEventListener('click', () => openForm('gasto'));
+  activarSwipe();
 
   document.getElementById('new-year').addEventListener('click', async () => {
     const last = Math.max(...state.years);

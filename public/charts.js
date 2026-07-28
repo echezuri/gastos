@@ -315,6 +315,61 @@ function chartFrame({ title, note, plot, series }) {
   ]);
 }
 
+/**
+ * Ranking en barras horizontales. Los nombres de categoría son largos y no entran abajo de
+ * una columna: acostadas se leen enteras y el orden se ve de arriba hacia abajo.
+ *
+ * `items` = [{ label, value, color?, onSelect? }]. Con `selected` se marca una.
+ */
+function chartBars({ items, width = 460, title, note, format = shortMoney, selected = null, onSelect = null }) {
+  const alto = 26;
+  const anchoEtiqueta = Math.min(150, Math.max(90, width * 0.32));
+  const height = Math.max(items.length * alto + 8, 40);
+  const max = Math.max(...items.map((i) => Math.abs(i.value)), 1);
+  const anchoBarra = width - anchoEtiqueta - 62;
+
+  const plot = svg('svg', { viewBox: `0 0 ${width} ${height}`, class: 'chart', role: 'img', preserveAspectRatio: 'xMidYMid meet' });
+
+  items.forEach((item, i) => {
+    const y = i * alto + 4;
+    const w = Math.max((Math.abs(item.value) / max) * anchoBarra, 2);
+    const color = item.color || CHART_COLORS.expense;
+    const grupo = svg('g', {
+      class: 'bar-row' + (selected === i ? ' is-selected' : '') + (onSelect ? ' is-clickable' : ''),
+    });
+
+    // Una franja invisible detrás de toda la fila: el clic y el tooltip agarran en
+    // cualquier lado, no sólo sobre la barra.
+    grupo.append(svg('rect', { x: 0, y: y - 2, width, height: alto - 2, class: 'bar-hit', rx: 5 }));
+    grupo.append(
+      svg('text', { x: 0, y: y + alto / 2 - 2, class: 'bar-label', 'dominant-baseline': 'middle' }, [
+        document.createTextNode(item.label),
+      ])
+    );
+    grupo.append(svg('rect', { x: anchoEtiqueta, y: y + 3, width: w, height: alto - 12, rx: 4, fill: color }));
+    grupo.append(
+      svg('text', { x: anchoEtiqueta + w + 7, y: y + alto / 2 - 2, class: 'bar-value', 'dominant-baseline': 'middle' }, [
+        document.createTextNode(format(item.value)),
+      ])
+    );
+
+    attachTip(grupo, `${item.label}: ${format(item.value)}`);
+    if (onSelect) {
+      grupo.addEventListener('click', () => onSelect(i, item));
+      grupo.setAttribute('tabindex', '0');
+      grupo.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onSelect(i, item);
+        }
+      });
+    }
+    plot.append(grupo);
+  });
+
+  return chartFrame({ title, note, plot });
+}
+
 /** Fila de números sueltos: lo que no necesita gráfico. */
 function statRow(stats) {
   return el(
