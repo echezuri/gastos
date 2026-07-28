@@ -4087,6 +4087,8 @@ async function sincronizarConSheet({ forzar = false, bajar = false } = {}) {
  * copia local y vuelve a dibujar la pantalla: te comería lo que estás tipeando.
  */
 const CADA = 60_000;
+const SEGUIDAS = 15_000;
+let ultimaMirada = 0;
 
 function estasEnElMedioDeAlgo() {
   if (document.querySelector('dialog[open]')) return true;
@@ -4097,6 +4099,10 @@ function estasEnElMedioDeAlgo() {
 function mirarPorCambios() {
   if (document.hidden || !navigator.onLine) return;
   if (estasEnElMedioDeAlgo()) return;
+  // Volver a la pestaña dispara visibilitychange y focus casi al mismo tiempo: sin esto
+  // serían dos bajadas de toda la planilla, una atrás de la otra.
+  if (Date.now() - ultimaMirada < SEGUIDAS) return;
+  ultimaMirada = Date.now();
   sincronizarConSheet({ bajar: true });
 }
 

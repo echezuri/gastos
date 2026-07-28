@@ -136,8 +136,9 @@ function crearSheetFalso(tablas) {
 
 // ---------------------------------------------------------------- un dispositivo
 
-function crearDispositivo(sheetFalso) {
-  const guardado = {};
+// `guardado` se puede reusar para simular que recargaste la página: el localStorage sigue,
+// pero el estado en memoria de los módulos arranca de cero.
+function crearDispositivo(sheetFalso, guardado = {}) {
   const almacenamiento = {
     getItem: (k) => (k in guardado ? guardado[k] : null),
     setItem: (k, v) => (guardado[k] = String(v)),
@@ -179,11 +180,15 @@ function crearDispositivo(sheetFalso) {
 
   return {
     ctx,
+    guardado,
     llamar: (metodo, ruta, cuerpo) => JSON.parse(vm.runInContext('llamarApi', ctx)(metodo, ruta, cuerpo || null)),
     almacen: vm.runInContext('almacenLocal', ctx),
     api: vm.runInContext('sheetsApi', ctx),
   };
 }
+
+/** Como cerrar y volver a abrir la app: se conserva lo guardado, no lo que había en memoria. */
+const recargar = (disp, sheetFalso) => crearDispositivo(sheetFalso, disp.guardado);
 
 async function bajar(disp) {
   const tablas = await disp.api.bajarTodo();
@@ -282,6 +287,37 @@ async function main() {
   comprobar('lo cargado y editado sin conexión sube entero', Boolean(recien), JSON.stringify(sheet.datos.Movimientos.slice(1).map((f) => f[7])));
   comprobar('y llega con la edición aplicada', recien && recien[13] === true, JSON.stringify(recien));
   comprobar('sin saltear nada', tanda.salteadas === 0, JSON.stringify(tanda));
+
+  // --- borrar algo y recién después abrir la app: la cola no se puede trabar ---
+  // El número interno de cada pestaña sólo se conocía al bajar, y la subida corre primero.
+  // Con la página recién abierta, un borrado pendiente moría con "No encuentro la pestaña"
+  // y todo lo que venía atrás —un gasto nuevo, por ejemplo— se quedaba sin subir.
+  sheet = crearSheetFalso(partida());
+  let f = crearDispositivo(sheet);
+  await bajar(f);
+  f.llamar('DELETE', '/api/movements/1');
+  f.llamar('POST', '/api/movements', { year: 2026, month: 8, section: 'variables', category: 'Casa', subcategory: 'el gasto nuevo', amount: 800, paid: true, currency: 'ARS' });
+  comprobar('quedan las dos operaciones sin subir', f.almacen.pendientes().length >= 2, String(f.almacen.pendientes().length));
+
+  f.almacen.guardar(); // en la app esto lo hace apiLocal después de cada escritura
+  f = recargar(f, sheet); // cerrás y volvés a abrir antes de que suba nada
+  comprobar('la cola sobrevive a cerrar la app', f.almacen.pendientes().length >= 2, String(f.almacen.pendientes().length));
+  let error = null;
+  let resultado = null;
+  try {
+    resultado = await subir(f);
+  } catch (err) {
+    error = err.message;
+  }
+  comprobar('la subida no revienta con la app recién abierta', error === null, error);
+  comprobar('el borrado se aplica igual', sheet.datos.Movimientos.slice(1).every((x) => x[0] !== 1), JSON.stringify(sheet.datos.Movimientos.slice(1).map((x) => x[0])));
+  comprobar(
+    'y el gasto de atrás llega al Sheet',
+    sheet.datos.Movimientos.slice(1).some((x) => x[7] === 'el gasto nuevo'),
+    JSON.stringify(sheet.datos.Movimientos.slice(1).map((x) => x[7]))
+  );
+  comprobar('no queda nada trabado en la cola', f.almacen.pendientes().length === 0, JSON.stringify(f.almacen.pendientes()));
+  void resultado;
 
   // --- lo que baja el otro es lo que subió el primero ---
   await bajar(compu);

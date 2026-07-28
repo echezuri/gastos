@@ -115,8 +115,14 @@ const sheetsApi = (() => {
     return letras || 'A';
   }
 
-  /** Baja todas las pestañas de una sola llamada. */
-  async function bajarTodo() {
+  /**
+   * El número interno de cada pestaña, que es lo que pide Google para borrar filas.
+   *
+   * Se lee cuando hace falta y no sólo al bajar: la subida corre antes que la bajada, así
+   * que en una página recién abierta este mapa está vacío y un borrado pendiente se quedaba
+   * sin poder resolverse.
+   */
+  async function conocerLasHojas() {
     const meta = await pedir('?fields=sheets.properties(title,sheetId)');
     idsDeHoja = {};
     const existentes = [];
@@ -124,6 +130,18 @@ const sheetsApi = (() => {
       idsDeHoja[hoja.properties.title] = hoja.properties.sheetId;
       if (PESTANAS.includes(hoja.properties.title)) existentes.push(hoja.properties.title);
     }
+    return existentes;
+  }
+
+  async function idDeHoja(nombre) {
+    if (idsDeHoja[nombre] !== undefined) return idsDeHoja[nombre];
+    await conocerLasHojas();
+    return idsDeHoja[nombre];
+  }
+
+  /** Baja todas las pestañas de una sola llamada. */
+  async function bajarTodo() {
+    const existentes = await conocerLasHojas();
     if (!existentes.length) return {};
 
     const consulta = existentes.map((h) => `ranges=${encodeURIComponent(rango(h))}`).join('&');
@@ -208,10 +226,11 @@ const sheetsApi = (() => {
           );
         }
       } else if (op.tipo === 'borrar') {
-        const hojaId = idsDeHoja[op.hoja];
-        if (hojaId === undefined) throw new Error(`No encuentro la pestaña ${op.hoja}`);
-        const fila = await filaReal(op);
-        if (fila === null) salteadas++; // ya lo borró otro dispositivo: listo
+        const hojaId = await idDeHoja(op.hoja);
+        const fila = hojaId === undefined ? null : await filaReal(op);
+        // Si la pestaña no está, tampoco están sus filas: no hay nada que borrar. Antes
+        // esto tiraba un error y dejaba toda la cola trabada atrás de una sola operación.
+        if (fila === null) salteadas++;
         else {
           await pedir(':batchUpdate', {
             method: 'POST',
