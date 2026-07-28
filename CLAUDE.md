@@ -2,6 +2,12 @@
 
 App de finanzas personales. La base de datos es un Google Sheet.
 
+> **Mudanza en curso: del Sheet a Firestore.** Una planilla no tiene claves primarias ni
+> avisa cuando cambia, y de ahí salieron los peores bugs (importes que caían en la columna
+> de al lado, un dispositivo pisando registros del otro). Lo que ya está: `db/` con las
+> reglas de seguridad y `tools/migrar-a-firebase.js` con su suite. **La app todavía corre
+> contra el Sheet**: lo de abajo sigue siendo cierto hasta que se cambie la capa de datos.
+
 Todo en español (interfaz, código, commits). Sin dependencias: ni npm install, ni frameworks.
 Node 22 trae el SQLite que usa la versión local.
 
@@ -36,10 +42,11 @@ se actualiza solo en un minuto.
 ## Pruebas
 
 ```bash
-npm test                           # las tres suites de abajo, en orden
+npm test                           # las cuatro suites de abajo, en orden
 node tools/probar-apps-script.js   # 83 comprobaciones: la lógica del Sheet contra la base local
 node tools/probar-importacion.js   # 15: arranca de una planilla vacía e importa
-node tools/probar-sincronizacion.js # 15: dos dispositivos sobre el mismo Sheet, sin pisarse
+node tools/probar-sincronizacion.js # 21: dos dispositivos sobre el mismo Sheet, sin pisarse
+node tools/probar-migracion.js     # 34: del backup del Sheet a Firestore, sin perder nada
 node tools/verify-import.js        # totales contra el sheet original
 node tools/medir-llamadas.js       # idas y vueltas al servidor (que no crezcan)
 ```
