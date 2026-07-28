@@ -308,5 +308,43 @@ const impago = viejo.llamar('POST', '/api/movements', {
 });
 comprobar('marcar pagado no rompe', !viejo.llamar('PUT', `/api/movements/${impago.id}`, { paid: true }).error);
 
+// ---------------------------------------------------------------- revisión
+
+console.log('\nEl informe de revisión encuentra lo que hay para sanear\n');
+
+const rev = llamar('GET', '/api/revision');
+const grupo = (nombre) => rev.parecidas.find((g) => g.options.some((o) => o.name === nombre));
+
+comprobar('junta INTERNET con Internet', Boolean(grupo('INTERNET')) && grupo('INTERNET').options.length === 2);
+comprobar('junta PLATAFORMA5 con Plataforma 5', Boolean(grupo('PLATAFORMA5')));
+comprobar('junta HAL+ con HAL +', Boolean(grupo('HAL+')));
+// "HAL" y "HAL +" son dos ingresos distintos: sólo se ignoran los espacios, no los signos
+comprobar('no confunde HAL con HAL +', !grupo('HAL+').options.some((o) => o.name === 'HAL'));
+comprobar('no confunde LUZ con LUZ QUINTA', !grupo('LUZ'));
+comprobar(
+  'cada variante trae sus años y cuánto se usa',
+  grupo('INTERNET').options.every((o) => o.years.length > 0 && o.celdas + o.movs > 0)
+);
+
+const huerfanasDe = [...new Set(rev.huerfanas.map((h) => `${h.section}/${h.category}`))];
+comprobar('encuentra las subcategorías de categorías que no existen', rev.huerfanas.length > 100, String(rev.huerfanas.length));
+comprobar('y son las de VARIOS y KIOSCO', huerfanasDe.every((c) => c === 'variables/VARIOS' || c === 'variables/KIOSCO'), huerfanasDe.join(', '));
+comprobar('cuenta Sin clasificar por año', rev.sinClasificar.length === 5 && rev.sinClasificar[0].year === 2022);
+comprobar('no inventa categorías vacías', rev.vacias.length === 0, JSON.stringify(rev.vacias));
+
+// Una planilla limpia no tiene que dar nada
+const limpia = cargarCodigo(crearPlanilla({}), ['Codigo.gs']);
+limpia.llamar('POST', '/api/movements', {
+  year: 2026, month: 3, section: 'variables', category: 'Casa', subcategory: 'Luz',
+  amount: 1000, paid: true, currency: 'ARS',
+});
+const revLimpia = limpia.llamar('GET', '/api/revision');
+comprobar(
+  'una planilla sana no reporta nada',
+  revLimpia.parecidas.length === 0 && revLimpia.huerfanas.length === 0 &&
+    revLimpia.sinUso.length === 0 && revLimpia.vacias.length === 0,
+  JSON.stringify(revLimpia)
+);
+
 console.log(`\n${pruebas} comprobaciones, ${fallas} con problema.`);
 process.exit(fallas ? 1 : 0);

@@ -338,6 +338,113 @@ function aniosCargados() {
   return lista.length ? lista : [new Date().getFullYear()];
 }
 
+// ---------------------------------------------------------------- revisión
+
+/**
+ * Para comparar nombres escritos de dos maneras: el sheet viejo usaba MAYÚSCULAS y sin
+ * espacios ("PLATAFORMA5") donde la taxonomía nueva usa otra ("Plataforma 5"). Los espacios
+ * se van, pero el resto de los signos no: "HAL" y "HAL +" son cosas distintas.
+ */
+function claveDeNombre(nombre) {
+  return texto(nombre).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '');
+}
+
+/**
+ * Lo que conviene mirar antes de sanear, junto en una sola respuesta. Sólo lee.
+ *
+ * La app trabaja de a un año por vez, así que sola no puede ver que "INTERNET" de 2022 y
+ * "Internet" de 2025 son lo mismo. Esto mira todos los años de una.
+ */
+function revisarDatos() {
+  const categorias = leer('Categorias');
+  const celdas = leer('Celdas');
+  const movimientos = leer('Movimientos');
+
+  // Una entrada por categoría (sin importar el año), con dónde y cuánto se usa.
+  const usos = {};
+  const deCategoria = function (seccion, nombre) {
+    const clave = seccion + '|' + nombre;
+    if (!usos[clave]) usos[clave] = { section: seccion, name: nombre, years: {}, celdas: 0, movs: 0, total: 0 };
+    return usos[clave];
+  };
+  categorias.forEach(function (c) {
+    deCategoria(texto(c.seccion), texto(c.nombre)).years[Number(c.anio)] = true;
+  });
+  celdas.forEach(function (c) {
+    const u = deCategoria(texto(c.seccion), texto(c.categoria));
+    u.years[Number(c.anio)] = true;
+    if (numero(c.monto)) {
+      u.celdas++;
+      u.total += Number(c.monto);
+    }
+  });
+  movimientos.forEach(function (m) {
+    const u = deCategoria(texto(m.seccion), texto(m.categoria));
+    u.years[Number(m.anio)] = true;
+    u.movs++;
+    if (bool(m.pagado)) u.total += Number(m.monto) || 0;
+  });
+
+  const lista = Object.keys(usos).map(function (k) {
+    const u = usos[k];
+    return {
+      section: u.section, name: u.name, celdas: u.celdas, movs: u.movs, total: u.total,
+      years: Object.keys(u.years).map(Number).sort(),
+    };
+  });
+
+  // Nombres distintos para lo mismo. Se comparan entre secciones también: así aparece la
+  // categoría que quedó cargada en dos lados.
+  const porClave = {};
+  lista.forEach(function (u) {
+    const k = claveDeNombre(u.name);
+    if (!porClave[k]) porClave[k] = [];
+    porClave[k].push(u);
+  });
+  const parecidas = Object.keys(porClave)
+    .filter(function (k) { return porClave[k].length > 1; })
+    .map(function (k) { return { key: k, options: porClave[k] }; });
+
+  // Categorías declaradas que no tienen ni una celda con monto ni un movimiento.
+  const vacias = lista.filter(function (u) { return u.celdas === 0 && u.movs === 0; });
+
+  // Subcategorías del catálogo colgando de una categoría que no existe: basura de la
+  // importación, no las ve nadie desde el formulario.
+  const existeCategoria = {};
+  lista.forEach(function (u) { existeCategoria[u.section + '|' + u.name] = true; });
+  const usadas = {};
+  movimientos.forEach(function (m) {
+    if (texto(m.subcategoria)) usadas[texto(m.seccion) + '|' + texto(m.categoria) + '|' + texto(m.subcategoria)] = true;
+  });
+
+  const huerfanas = [];
+  const sinUso = [];
+  leer('Subcategorias').forEach(function (s) {
+    const fila = { section: texto(s.seccion), category: texto(s.categoria), name: texto(s.nombre) };
+    if (!existeCategoria[fila.section + '|' + fila.category]) huerfanas.push(fila);
+    else if (!usadas[fila.section + '|' + fila.category + '|' + fila.name]) sinUso.push(fila);
+  });
+
+  // 2022-2024 están en "Sin clasificar" a propósito (el sheet viejo marcaba la categoría
+  // con el color de la celda). Lo que vale la pena mirar es lo reciente.
+  const sinClasificar = {};
+  movimientos.forEach(function (m) {
+    if (texto(m.categoria) !== 'Sin clasificar') return;
+    const anio = Number(m.anio);
+    sinClasificar[anio] = (sinClasificar[anio] || 0) + 1;
+  });
+
+  return {
+    parecidas: parecidas,
+    vacias: vacias,
+    huerfanas: huerfanas,
+    sinUso: sinUso,
+    sinClasificar: Object.keys(sinClasificar).map(Number).sort().map(function (a) {
+      return { year: a, movs: sinClasificar[a] };
+    }),
+  };
+}
+
 // ---------------------------------------------------------------- escritura
 
 function asegurarCategoria(anio, seccion, nombre) {
@@ -626,6 +733,8 @@ function despachar(metodo, ruta, cuerpo) {
       }),
     };
   }
+
+  if (camino === '/api/revision' && metodo === 'GET') return revisarDatos();
 
   if (camino === '/api/vehicles' && metodo === 'GET') {
     const services = leer('AutoServices');

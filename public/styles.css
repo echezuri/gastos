@@ -1191,6 +1191,16 @@ tr.is-pending {
   opacity: 0.6;
 }
 
+/* En "Nombres repetidos" cada variante es una fila: la línea separa un grupo del
+   siguiente, así se ve cuáles compiten entre sí. */
+tr.grupo-primero td {
+  border-top: 1px solid var(--line);
+}
+
+tr.grupo-primero:first-child td {
+  border-top: 0;
+}
+
 .filter-chip {
   border: 1px solid var(--accent);
   background: var(--accent-soft);

@@ -92,6 +92,7 @@ const state = {
   quinta: null,
   month: new Date().getMonth() + 1,
   filter: null, // { section, category } cuando mirás el detalle de una celda
+  revision: null, // el informe de saneamiento; se pide sólo al abrir la solapa
 };
 
 // ---------------------------------------------------------------- utilidades
@@ -671,6 +672,153 @@ function renderPending() {
     ]),
     el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, rows)])]),
   ]);
+}
+
+// ---------------------------------------------------------------- revisión
+
+/**
+ * Qué hay para sanear, mirando todos los años juntos. Sólo mira: no cambia nada.
+ *
+ * El resto de la app trabaja de a un año, así que sola no puede ver que "INTERNET" de 2022
+ * y "Internet" de 2025 son la misma cosa. El informe lo arma la lógica compartida.
+ */
+let pidiendoRevision = false;
+
+async function cargarRevision() {
+  if (pidiendoRevision) return;
+  pidiendoRevision = true;
+  try {
+    state.revision = await api('GET', '/api/revision');
+    renderYear();
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    pidiendoRevision = false;
+  }
+}
+
+function bloqueRevision(titulo, pista, filas, { tono = '' } = {}) {
+  if (!filas.length) return null;
+  return el('section', { class: `panel ${tono}`.trim() }, [
+    el('div', { class: 'panel-head' }, [
+      el('h2', { text: titulo }),
+      el('span', { class: 'hint', text: pista }),
+    ]),
+    el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, filas)])]),
+  ]);
+}
+
+function renderRevision() {
+  if (!state.revision) {
+    cargarRevision();
+    return el('section', { class: 'panel' }, [
+      el('div', { class: 'panel-head' }, [el('h2', { text: 'Revisión' }), el('span', { class: 'hint', text: 'Mirando todos los años…' })]),
+    ]);
+  }
+
+  const { parecidas, huerfanas, sinUso, vacias, sinClasificar } = state.revision;
+  const bloques = [];
+
+  // Un grupo por nombre repetido, con una fila por variante: así se ve de un vistazo cuál
+  // conviene conservar (la que tiene más años y más movimientos).
+  bloques.push(
+    bloqueRevision(
+      'Nombres repetidos',
+      `${parecidas.length} grupo(s) · el mismo concepto escrito de dos maneras`,
+      parecidas.flatMap((grupo) =>
+        grupo.options.map((o, i) =>
+          el('tr', { class: i === 0 ? 'grupo-primero' : '' }, [
+            el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: i === 0 ? o.section : '' })]),
+            el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: o.name })]),
+            el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: o.years.join(', ') })]),
+            el('td', { class: 'num', text: `${o.celdas + o.movs} uso(s)` }),
+            amountCell(o.total),
+          ])
+        )
+      )
+    )
+  );
+
+  // Agrupadas por la categoría que no existe: son 100 y pico y todas dicen lo mismo.
+  const porCategoria = {};
+  huerfanas.forEach((h) => {
+    const k = `${h.section}|${h.category}`;
+    (porCategoria[k] = porCategoria[k] || []).push(h.name);
+  });
+  bloques.push(
+    bloqueRevision(
+      'Subcategorías huérfanas',
+      `${huerfanas.length} · cuelgan de una categoría que no existe, no las ve nadie`,
+      Object.keys(porCategoria).map((k) => {
+        const nombres = porCategoria[k];
+        return el('tr', { title: nombres.join(' · ') }, [
+          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: k.split('|')[0] })]),
+          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: k.split('|')[1] })]),
+          el('td', { style: 'text-align:left' }, [
+            el('span', { class: 'plain-label has-note', text: nombres.slice(0, 4).join(', ') + (nombres.length > 4 ? '…' : '') }),
+          ]),
+          el('td', { class: 'num', text: `${nombres.length}` }),
+        ]);
+      })
+    )
+  );
+
+  bloques.push(
+    bloqueRevision(
+      'Subcategorías sin uso',
+      `${sinUso.length} · están en el catálogo pero ningún movimiento las usa`,
+      sinUso.map((s) =>
+        el('tr', {}, [
+          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: s.section })]),
+          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: s.category })]),
+          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: s.name })]),
+        ])
+      )
+    )
+  );
+
+  bloques.push(
+    bloqueRevision(
+      'Categorías vacías',
+      `${vacias.length} · declaradas, sin una sola celda ni movimiento`,
+      vacias.map((v) =>
+        el('tr', {}, [
+          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: v.section })]),
+          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.name })]),
+          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.years.join(', ') })]),
+        ])
+      )
+    )
+  );
+
+  // 2022-2024 está así a propósito: el sheet viejo marcaba la categoría con el color de la
+  // celda y eso no se recuperó. Lo reciente sí se puede acomodar a mano.
+  bloques.push(
+    bloqueRevision(
+      'Sin clasificar',
+      'los años viejos están así a propósito; lo reciente se puede acomodar',
+      sinClasificar.map((s) =>
+        el('tr', {}, [
+          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: String(s.year) })]),
+          el('td', { style: 'text-align:left' }, [
+            el('span', { class: 'plain-label', text: s.year >= 2025 ? 'se puede acomodar a mano' : 'no se puede recuperar (venía por color de celda)' }),
+          ]),
+          el('td', { class: 'num', text: `${s.movs} movimiento(s)` }),
+        ])
+      )
+    )
+  );
+
+  const hay = bloques.filter(Boolean);
+  if (!hay.length) {
+    return el('section', { class: 'panel' }, [
+      el('div', { class: 'panel-head' }, [
+        el('h2', { text: 'Revisión' }),
+        el('span', { class: 'hint', text: 'No encontré nada para revisar.' }),
+      ]),
+    ]);
+  }
+  return el('div', {}, hay);
 }
 
 // ---------------------------------------------------------------- movimientos del mes
@@ -1430,6 +1578,31 @@ function tomarConfiguracionDelLink() {
   }
 }
 
+/**
+ * Guarda la planilla entera en un archivo, tal cual está en el teléfono: las mismas
+ * pestañas, filas y columnas que tiene el Sheet. Es la red de seguridad antes de sanear,
+ * porque borrar una categoría se lleva sus movimientos y no hay vuelta atrás.
+ */
+function bajarBackup() {
+  const tablas = almacenLocal.tablas();
+  if (!Object.keys(tablas).length) throw new Error('Todavía no hay datos para guardar');
+  const sinSubir = almacenLocal.pendientes().length;
+  const contenido = {
+    bajado: new Date().toISOString(),
+    sincronizado: almacenLocal.fechaSincronizado(),
+    sinSubir: sinSubir,
+    tablas: tablas,
+  };
+  const nombre = `gastos-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+  const url = URL.createObjectURL(new Blob([JSON.stringify(contenido, null, 2)], { type: 'application/json' }));
+  const a = el('a', { href: url, download: nombre });
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  return sinSubir ? `${nombre} (ojo: ${sinSubir} cambio(s) todavía sin subir al Sheet)` : nombre;
+}
+
 function mostrarConfiguracion({ obligatoria = false } = {}) {
   const actual = sheetsApi.config.leer();
   const idPlanilla = el('input', { class: 'field-input', type: 'text', value: actual.spreadsheetId, placeholder: '1iaAWee…' });
@@ -1485,6 +1658,21 @@ function mostrarConfiguracion({ obligatoria = false } = {}) {
     },
   });
 
+  // Antes de sanear conviene tener de dónde volver: esto baja la planilla entera tal como
+  // está en el teléfono, sin pasar por Google.
+  const avisoBackup = el('small', { class: 'field-hint' });
+  const botonBackup = el('button', {
+    class: 'btn btn-ghost login-btn',
+    text: '💾 Bajar un backup',
+    onclick: () => {
+      try {
+        avisoBackup.textContent = `Listo: ${bajarBackup()}`;
+      } catch (err) {
+        avisoBackup.textContent = err.message;
+      }
+    },
+  });
+
   const caja = el('div', { id: 'config', class: 'login' }, [
     el('div', { class: 'login-caja config-caja' }, [
       el('div', { class: 'brand-mark', text: '$' }),
@@ -1492,6 +1680,8 @@ function mostrarConfiguracion({ obligatoria = false } = {}) {
       el('label', { class: 'field' }, [el('span', { text: 'ID de la planilla' }), idPlanilla]),
       el('label', { class: 'field' }, [el('span', { text: 'ID de cliente de Google' }), idCliente]),
       el('button', { class: 'btn btn-accent login-btn', text: 'Guardar y conectar', onclick: guardar }),
+      MODO === 'pwa' && almacenLocal.hayDatos() ? botonBackup : null,
+      MODO === 'pwa' && almacenLocal.hayDatos() ? avisoBackup : null,
       sheetsApi.config.completa() ? botonLink : null,
       sheetsApi.config.completa() ? avisoLink : null,
       obligatoria ? null : el('button', { class: 'btn btn-ghost login-btn', text: 'Cerrar', onclick: () => document.getElementById('config').remove() }),
@@ -1603,6 +1793,7 @@ const TABS = {
     if (state.data.pending.length) {
       tabs.push({ key: 'pendientes', label: 'Sin pagar', badge: state.data.pending.length });
     }
+    tabs.push({ key: 'revision', label: 'Revisión' });
     return tabs;
   },
   auto: () => [
@@ -1667,6 +1858,7 @@ function activePanel() {
   if (tab === 'resumen') return renderSummary();
   if (tab === 'movimientos') return renderMovements();
   if (tab === 'pendientes') return renderPending() || renderSummary();
+  if (tab === 'revision') return renderRevision();
   const section = SECTIONS.find((s) => s.key === tab);
   return section ? renderSection(section) : renderSummary();
 }
@@ -1698,6 +1890,7 @@ async function refreshMovements() {
 }
 
 async function refreshAll() {
+  state.revision = null;
   state.data = await api('GET', `/api/year/${state.year}`);
   await loadMovements();
   renderYear();
@@ -1706,6 +1899,7 @@ async function refreshAll() {
 /** Toma el estado que vino junto con la respuesta de una escritura. */
 function aplicarEstado(estado) {
   if (!estado) return false;
+  state.revision = null; // cualquier escritura lo deja viejo: se vuelve a pedir al abrirlo
   if (estado.year) state.data = estado.year;
   if (estado.years) {
     state.years = estado.years;
