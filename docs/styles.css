@@ -1876,6 +1876,176 @@ tr.grupo-primero:first-child td {
   flex: 1 1 160px;
 }
 
+.catalogo-crear-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.catalogo-crear-form select {
+  width: auto;
+}
+
+.catalogo-crear-form .add-input {
+  flex: 1 1 160px;
+}
+
+/* Un link con pinta de texto para abrir/cerrar las subcategorías de una categoría:
+   no compite visualmente con los botones de acción (⇄ ✕) de al lado. */
+.btn-link {
+  border: 0;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 0;
+  text-align: right;
+  width: 100%;
+}
+
+.btn-link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+/* ---------- Revisión: la cabecera de bienvenida ---------- */
+
+.revision-resumen .panel-head {
+  border-bottom: 0;
+}
+
+/* ---------- Revisión: tarjetas que arrancan cerradas ---------- */
+
+/* La idea completa del pedido: nada se ve tocable hasta que uno mismo abre la tarjeta.
+   Desplazarse por Revisión con esto cerrado no puede disparar ninguna acción por error. */
+.colapsable {
+  overflow: visible; /* .panel usa clip; acá el contenido interno ya se recorta solo */
+}
+
+.colapsable-cabecera {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 13px 16px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.colapsable-cabecera:hover {
+  background: var(--row-hover);
+}
+
+.colapsable-chevron {
+  flex: none;
+  color: var(--ink-soft);
+  font-size: 11px;
+  transition: transform 0.15s ease;
+}
+
+.colapsable-chevron.esta-abierto {
+  transform: rotate(90deg);
+}
+
+.colapsable-titulos {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.colapsable-titulo {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+/* ---------- Revisión: filas simples (sin usar, sin clasificar) ---------- */
+
+.simple-lista {
+  padding: 2px 16px 14px;
+}
+
+.simple-fila {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border-top: 1px solid var(--line);
+}
+
+.simple-fila:first-child {
+  border-top: 0;
+}
+
+.simple-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.simple-etiqueta {
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.simple-principal {
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.simple-detalle {
+  font-size: 12px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.simple-fila .btn-small {
+  flex: none;
+}
+
+.sin-accion {
+  padding: 8px 0;
+  line-height: 1.5;
+}
+
+/* ---------- Revisión: nombres repetidos, agrupados ---------- */
+
+.repetidos-lista {
+  padding: 2px 16px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.repetidos-grupo {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 12px;
+}
+
+.repetidos-grupo-titulo {
+  padding-top: 6px;
+}
+
+.repetidos-grupo .simple-fila:last-child {
+  border-bottom: 0;
+}
+
 .dialogo-pie {
   display: flex;
   justify-content: flex-end;

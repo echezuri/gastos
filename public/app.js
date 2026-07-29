@@ -95,6 +95,7 @@ const state = {
   revision: null, // el informe de saneamiento; se pide sólo al abrir la solapa
   desglose: null, // { section, name } de la categoría abierta en el ranking del resumen
   mesGrafico: null, // el mes que miran los gráficos; sin elegir, el que está corriendo
+  revisionAbierto: {}, // qué tarjetas de Revisión están desplegadas; todas arrancan cerradas
 };
 
 // ---------------------------------------------------------------- utilidades
@@ -1253,13 +1254,31 @@ function renderCatalogo(catalogo) {
   const filas = [];
   for (const cat of catalogo || []) {
     const usos = cat.celdas + cat.movs;
+    const claveSubs = `sub:${cat.section}|${cat.name}`;
+    const subsAbiertas = Boolean(state.revisionAbierto[claveSubs]);
+    const subsReales = cat.subs.filter((s) => s.name !== '—');
+
     filas.push(
       el('tr', { class: 'grupo-primero' }, [
         el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: SECTION_TITLE[cat.section] || cat.section })]),
         el('td', { style: 'text-align:left' }, [
           campoRenombrar(cat.name, (nuevo) => api('POST', '/api/category/merge', { section: cat.section, from: cat.name, to: nuevo })),
         ]),
-        el('td', { class: 'num', text: `${usos} uso(s)` }),
+        el('td', { class: 'num' }, [
+          // Las subcategorías no se ven hasta que las pedís: menos filas a la vista de
+          // entrada, y ninguna categoría con muchas dominando toda la pantalla.
+          subsReales.length
+            ? el('button', {
+                class: 'btn-link',
+                type: 'button',
+                text: `${usos} uso(s) · ${subsReales.length} sub. ${subsAbiertas ? '▾' : '▸'}`,
+                onclick: () => {
+                  state.revisionAbierto[claveSubs] = !subsAbiertas;
+                  renderYear();
+                },
+              })
+            : el('span', { text: `${usos} uso(s)` }),
+        ]),
         amountCell(cat.total),
         el('td', { class: 'num actions-cell' }, [
           el('button', { class: 'icon-btn', title: 'Mover la categoría entera a otra sección, con su nombre', text: '⇄', onclick: () => moveCategoryToSection(cat.section, cat.name) }),
@@ -1273,39 +1292,41 @@ function renderCatalogo(catalogo) {
       ])
     );
 
-    for (const sub of cat.subs) {
-      filas.push(
-        el('tr', { class: 'fila-sub' }, [
-          el('td', { class: 'col-label' }),
-          el('td', { style: 'text-align:left' }, [
-            el('span', { class: 'sub-marca', text: '└' }),
-            sub.name === '—'
-              ? el('span', { class: 'plain-label', text: 'sin subcategoría' })
-              : campoRenombrar(sub.name, (nuevo) =>
-                  api('PATCH', '/api/subcategory', { section: cat.section, category: cat.name, from: sub.name, to: nuevo })
-                ),
-          ]),
-          el('td', { class: 'num', text: sub.movs ? `${sub.movs} mov.` : 'sin uso' }),
-          amountCell(sub.total),
-          el('td', { class: 'num actions-cell' }, [
-            sub.name === '—'
-              ? null
-              : el('button', {
-                  class: 'icon-btn danger',
-                  text: '✕',
-                  title: sub.movs ? `Eliminar. Vas a elegir a dónde va cada uno de sus ${sub.movs} movimiento(s)` : 'Borrar del catálogo (sin uso)',
-                  onclick: () => eliminarSubcategoria(cat, sub, catalogo),
-                }),
-          ]),
-        ])
-      );
+    if (subsAbiertas || !subsReales.length) {
+      for (const sub of cat.subs) {
+        filas.push(
+          el('tr', { class: 'fila-sub' }, [
+            el('td', { class: 'col-label' }),
+            el('td', { style: 'text-align:left' }, [
+              el('span', { class: 'sub-marca', text: '└' }),
+              sub.name === '—'
+                ? el('span', { class: 'plain-label', text: 'sin subcategoría' })
+                : campoRenombrar(sub.name, (nuevo) =>
+                    api('PATCH', '/api/subcategory', { section: cat.section, category: cat.name, from: sub.name, to: nuevo })
+                  ),
+            ]),
+            el('td', { class: 'num', text: sub.movs ? `${sub.movs} mov.` : 'sin uso' }),
+            amountCell(sub.total),
+            el('td', { class: 'num actions-cell' }, [
+              sub.name === '—'
+                ? null
+                : el('button', {
+                    class: 'icon-btn danger',
+                    text: '✕',
+                    title: sub.movs ? `Eliminar. Vas a elegir a dónde va cada uno de sus ${sub.movs} movimiento(s)` : 'Borrar del catálogo (sin uso)',
+                    onclick: () => eliminarSubcategoria(cat, sub, catalogo),
+                  }),
+            ]),
+          ])
+        );
+      }
+      if (subsAbiertas) filas.push(filaCrearSubcategoria(cat));
     }
-    filas.push(filaCrearSubcategoria(cat));
   }
 
-  // Crear una categoría nueva de cero, sin tener que cargar un gasto primero
+  const abiertoCrear = Boolean(state.revisionAbierto.catalogoCrear);
   const seccionNueva = el('select', { class: 'field-input' }, SECTIONS.map((s) => el('option', { value: s.key, text: s.title })));
-  const nombreNuevo = el('input', { class: 'add-input', type: 'text', placeholder: '+ nueva categoría' });
+  const nombreNuevo = el('input', { class: 'add-input', type: 'text', placeholder: 'nombre de la categoría' });
   nombreNuevo.addEventListener('keydown', async (e) => {
     if (e.key !== 'Enter' || !nombreNuevo.value.trim()) return;
     try {
@@ -1321,25 +1342,69 @@ function renderCatalogo(catalogo) {
   return el('section', { class: 'panel' }, [
     el('div', { class: 'panel-head' }, [
       el('h2', { text: 'Categorías y subcategorías' }),
-      el('span', { class: 'hint', text: `${(catalogo || []).length} categorías · escribí encima para renombrar` }),
+      el('span', { class: 'hint', text: `${(catalogo || []).length} categorías · tocá el nombre para renombrar` }),
     ]),
     catalogo && catalogo.length ? el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, filas)])]) : null,
     el('div', { class: 'catalogo-crear' }, [
-      seccionNueva,
-      nombreNuevo,
-      el('small', { class: 'field-hint', text: `se crea para ${state.year}; si cargás en otro año se agrega sola` }),
+      abiertoCrear
+        ? el('div', { class: 'catalogo-crear-form' }, [
+            seccionNueva,
+            nombreNuevo,
+            el('small', { class: 'field-hint', text: `se crea para ${state.year}; si cargás en otro año se agrega sola` }),
+          ])
+        : el('button', {
+            class: 'btn btn-ghost',
+            type: 'button',
+            text: '+ Agregar categoría',
+            onclick: () => {
+              state.revisionAbierto.catalogoCrear = true;
+              renderYear();
+              requestAnimationFrame(() => document.querySelector('.catalogo-crear-form input')?.focus());
+            },
+          }),
     ]),
   ]);
 }
 
-function bloqueRevision(titulo, pista, filas, { tono = '' } = {}) {
-  if (!filas.length) return null;
-  return el('section', { class: `panel ${tono}`.trim() }, [
-    el('div', { class: 'panel-head' }, [
-      el('h2', { text: titulo }),
-      el('span', { class: 'hint', text: pista }),
+/**
+ * Una tarjeta que arranca cerrada: sólo el título y de qué se trata, en una línea. No hay
+ * ni un botón visible hasta que la abrís vos — así la pantalla no recibe con una pared de
+ * cosas para borrar, y desplazarse por Revisión no arriesga tocar nada por accidente.
+ */
+function tarjetaColapsable({ clave, titulo, subtitulo, tono = '', contenido }) {
+  const abierta = Boolean(state.revisionAbierto[clave]);
+  return el('section', { class: `panel colapsable ${tono}`.trim() }, [
+    el(
+      'button',
+      {
+        class: 'colapsable-cabecera',
+        type: 'button',
+        onclick: () => {
+          state.revisionAbierto[clave] = !abierta;
+          renderYear();
+        },
+      },
+      [
+        el('span', { class: 'colapsable-chevron' + (abierta ? ' esta-abierto' : ''), text: '▸' }),
+        el('div', { class: 'colapsable-titulos' }, [
+          el('span', { class: 'colapsable-titulo', text: titulo }),
+          el('span', { class: 'hint', text: subtitulo }),
+        ]),
+      ]
+    ),
+    abierta ? contenido() : null,
+  ]);
+}
+
+/** Fila simple de "lo que no se usa": un renglón por cosa, no una tabla de columnas. */
+function filaSinUsar({ etiqueta, principal, detalle, boton, onBorrar }) {
+  return el('div', { class: 'simple-fila' }, [
+    el('div', { class: 'simple-info' }, [
+      el('span', { class: 'simple-etiqueta', text: etiqueta }),
+      el('span', { class: 'simple-principal', text: principal }),
+      detalle ? el('span', { class: 'simple-detalle', text: detalle }) : null,
     ]),
-    el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, filas)])]),
+    el('button', { class: 'btn btn-small', text: boton || 'Borrar', onclick: onBorrar }),
   ]);
 }
 
@@ -1352,148 +1417,162 @@ function renderRevision() {
   }
 
   const { catalogo, parecidas, huerfanas, sinUso, vacias, sinClasificar } = state.revision;
-  const bloques = [renderCatalogo(catalogo)];
+  const bloques = [];
 
-  // Un grupo por nombre repetido, con una fila por variante: así se ve de un vistazo cuál
-  // conviene conservar (la que tiene más años y más movimientos).
-  bloques.push(
-    bloqueRevision(
-      'Nombres repetidos',
-      `${parecidas.length} grupo(s) · el mismo concepto escrito de dos maneras`,
-      parecidas.flatMap((grupo) =>
-        grupo.options.map((o, i) =>
-          el('tr', { class: i === 0 ? 'grupo-primero' : '' }, [
-            el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: i === 0 ? o.section : '' })]),
-            el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: o.name })]),
-            el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: o.years.join(', ') })]),
-            el('td', { class: 'num', text: `${o.celdas + o.movs} uso(s)` }),
-            amountCell(o.total),
-            el('td', { class: 'num' }, [
-              // Fusionar el resto del grupo adentro de esta: se elige la que queda, no la
-              // que se va, que es como uno lo piensa.
-              grupo.options.length > 1
-                ? el('button', {
-                    class: 'btn btn-small',
-                    text: 'Dejar sólo esta',
-                    title: `Fusionar ${grupo.options.filter((x) => x !== o).map((x) => `"${x.name}"`).join(' y ')} adentro de "${o.name}"`,
-                    onclick: () => fusionarGrupo(grupo, o),
-                  })
-                : null,
-            ]),
-          ])
-        )
-      )
-    )
-  );
-
-  // Agrupadas por la categoría que no existe: son 100 y pico y todas dicen lo mismo.
+  // Huérfanas, sin uso y vacías son la misma idea vista desde tres costados: nada las usa,
+  // se pueden borrar sin que se pierda un peso. Separarlas en tres secciones técnicas no le
+  // suma nada al usuario; juntas son una sola pregunta: "¿esto lo puedo tirar?".
   const porCategoria = {};
   huerfanas.forEach((h) => {
     const k = `${h.section}|${h.category}`;
     (porCategoria[k] = porCategoria[k] || []).push(h.name);
   });
-  bloques.push(
-    bloqueRevision(
-      'Subcategorías huérfanas',
-      `${huerfanas.length} · cuelgan de una categoría que no existe, no las ve nadie`,
-      Object.keys(porCategoria).map((k) => {
-        const nombres = porCategoria[k];
-        return el('tr', { title: nombres.join(' · ') }, [
-          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: k.split('|')[0] })]),
-          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: k.split('|')[1] })]),
-          el('td', { style: 'text-align:left' }, [
-            el('span', { class: 'plain-label has-note', text: nombres.slice(0, 4).join(', ') + (nombres.length > 4 ? '…' : '') }),
-          ]),
-          el('td', { class: 'num', text: `${nombres.length}` }),
-          el('td', { class: 'num' }, [
-            el('button', {
-              class: 'btn btn-small',
-              text: 'Borrar todas',
-              onclick: () => borrarSubcategorias(k.split('|')[0], k.split('|')[1]),
-            }),
-          ]),
-        ]);
+  const filasSinUsar = [
+    ...Object.keys(porCategoria).map((k) => {
+      const [seccion, categoria] = k.split('|');
+      const nombres = porCategoria[k];
+      return filaSinUsar({
+        etiqueta: SECTION_TITLE[seccion] || seccion,
+        principal: `${categoria} · ${nombres.length} subcategoría(s)`,
+        detalle: nombres.slice(0, 4).join(', ') + (nombres.length > 4 ? '…' : ''),
+        boton: 'Borrar todas',
+        onBorrar: () => borrarSubcategorias(seccion, categoria),
+      });
+    }),
+    ...sinUso.map((s) =>
+      filaSinUsar({
+        etiqueta: SECTION_TITLE[s.section] || s.section,
+        principal: `${s.category} · ${s.name}`,
+        detalle: 'ningún gasto la usa',
+        onBorrar: () => borrarSubcategorias(s.section, s.category, s.name),
       })
-    )
-  );
+    ),
+    ...vacias.map((v) =>
+      filaSinUsar({
+        etiqueta: SECTION_TITLE[v.section] || v.section,
+        principal: v.name,
+        detalle: `categoría · declarada en ${v.years.join(', ')}, nunca se cargó nada`,
+        onBorrar: async () => {
+          if (!confirmarBorrado(`"${v.name}" (está vacía, no tiene nada adentro)`)) return;
+          try {
+            for (const anio of v.years) await api('DELETE', '/api/category', { year: anio, section: v.section, name: v.name });
+            await refreshAll();
+            toast('Borrada');
+          } catch (err) {
+            toast(err.message, true);
+          }
+        },
+      })
+    ),
+  ];
 
-  bloques.push(
-    bloqueRevision(
-      'Subcategorías sin uso',
-      `${sinUso.length} · están en el catálogo pero ningún movimiento las usa`,
-      sinUso.map((s) =>
-        el('tr', {}, [
-          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: s.section })]),
-          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: s.category })]),
-          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: s.name })]),
-          el('td', { class: 'num' }, [
-            el('button', { class: 'btn btn-small', text: 'Borrar', onclick: () => borrarSubcategorias(s.section, s.category, s.name) }),
-          ]),
-        ])
-      )
-    )
-  );
-
-  bloques.push(
-    bloqueRevision(
-      'Categorías vacías',
-      `${vacias.length} · declaradas, sin una sola celda ni movimiento`,
-      vacias.map((v) =>
-        el('tr', {}, [
-          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: v.section })]),
-          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.name })]),
-          el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.years.join(', ') })]),
-          el('td', { class: 'num' }, [
-            el('button', {
-              class: 'btn btn-small',
-              text: 'Borrar',
-              onclick: async () => {
-                if (!confirmarBorrado(`"${v.name}" (está vacía, no tiene nada adentro)`)) return;
-                try {
-                  for (const anio of v.years) {
-                    await api('DELETE', '/api/category', { year: anio, section: v.section, name: v.name });
-                  }
-                  await refreshAll();
-                  toast('Borrada');
-                } catch (err) {
-                  toast(err.message, true);
-                }
-              },
-            }),
-          ]),
-        ])
-      )
-    )
-  );
-
-  // 2022-2024 está así a propósito: el sheet viejo marcaba la categoría con el color de la
-  // celda y eso no se recuperó. Lo reciente sí se puede acomodar a mano.
-  bloques.push(
-    bloqueRevision(
-      'Sin clasificar',
-      'los años viejos están así a propósito; lo reciente se puede acomodar',
-      sinClasificar.map((s) =>
-        el('tr', {}, [
-          el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: String(s.year) })]),
-          el('td', { style: 'text-align:left' }, [
-            el('span', { class: 'plain-label', text: s.year >= 2025 ? 'se puede acomodar a mano' : 'no se puede recuperar (venía por color de celda)' }),
-          ]),
-          el('td', { class: 'num', text: `${s.movs} movimiento(s)` }),
-        ])
-      )
-    )
-  );
-
-  const hay = bloques.filter(Boolean);
-  if (!hay.length) {
-    return el('section', { class: 'panel' }, [
-      el('div', { class: 'panel-head' }, [
-        el('h2', { text: 'Revisión' }),
-        el('span', { class: 'hint', text: 'No encontré nada para revisar.' }),
-      ]),
-    ]);
+  if (parecidas.length) {
+    bloques.push(
+      tarjetaColapsable({
+        clave: 'repetidos',
+        titulo: `${parecidas.length} nombre(s) repetido(s)`,
+        subtitulo: 'el mismo gasto, escrito de dos formas — tocá para ver cuáles',
+        contenido: () =>
+          el(
+            'div',
+            { class: 'repetidos-lista' },
+            parecidas.map((grupo) =>
+              el('div', { class: 'repetidos-grupo' }, [
+                el('div', { class: 'repetidos-grupo-titulo' }, [
+                  el('span', { class: 'plain-label', text: SECTION_TITLE[grupo.options[0].section] || grupo.options[0].section }),
+                ]),
+                ...grupo.options.map((o) =>
+                  el('div', { class: 'simple-fila' }, [
+                    el('div', { class: 'simple-info' }, [
+                      el('span', { class: 'simple-principal', text: o.name }),
+                      el('span', { class: 'simple-detalle', text: `${o.years.join(', ')} · ${o.celdas + o.movs} uso(s) · ${money(o.total)}` }),
+                    ]),
+                    el('button', {
+                      class: 'btn btn-small',
+                      text: 'Dejar sólo esta',
+                      title: `Fusionar ${grupo.options.filter((x) => x !== o).map((x) => `"${x.name}"`).join(' y ')} adentro de "${o.name}"`,
+                      onclick: () => fusionarGrupo(grupo, o),
+                    }),
+                  ])
+                ),
+              ])
+            )
+          ),
+      })
+    );
   }
-  return el('div', {}, hay);
+
+  if (filasSinUsar.length) {
+    bloques.push(
+      tarjetaColapsable({
+        clave: 'sinUsar',
+        titulo: `${filasSinUsar.length} sin usar`,
+        subtitulo: 'nada las referencia — se pueden borrar sin miedo, tocá para verlas',
+        contenido: () => el('div', { class: 'simple-lista' }, filasSinUsar),
+      })
+    );
+  }
+
+  // 2022-2024 está así a propósito y no hay nada que hacer: el sheet viejo marcaba la
+  // categoría con el color de la celda y eso no se recuperó. Sólo lo reciente es
+  // accionable, así que es lo único que se muestra suelto; el resto es una sola línea.
+  const sinAccion = sinClasificar.filter((s) => s.year < 2025);
+  const accionable = sinClasificar.filter((s) => s.year >= 2025);
+  if (sinClasificar.length) {
+    bloques.push(
+      tarjetaColapsable({
+        clave: 'sinClasificar',
+        titulo: `Sin clasificar`,
+        subtitulo: `${sinClasificar.reduce((t, s) => t + s.movs, 0)} movimiento(s) · tocá para ver el detalle`,
+        contenido: () =>
+          el('div', { class: 'simple-lista' }, [
+            sinAccion.length
+              ? el('p', {
+                  class: 'hint sin-accion',
+                  text: `${sinAccion.map((s) => s.year).join(', ')}: ${sinAccion.reduce((t, s) => t + s.movs, 0)} movimiento(s), no se pueden recuperar (el sheet viejo marcaba la categoría con el color de la celda).`,
+                })
+              : null,
+            ...accionable.map((s) =>
+              el('div', { class: 'simple-fila' }, [
+                el('div', { class: 'simple-info' }, [
+                  el('span', { class: 'simple-principal', text: String(s.year) }),
+                  el('span', { class: 'simple-detalle', text: `${s.movs} movimiento(s) · se pueden acomodar a mano` }),
+                ]),
+                el('button', {
+                  class: 'btn btn-small',
+                  text: 'Ver',
+                  onclick: async () => {
+                    state.year = s.year;
+                    state.filter = null;
+                    setTab('movimientos', 'anio');
+                    if (state.years.includes(s.year)) await refreshMovements();
+                    else await refreshAll();
+                  },
+                }),
+              ])
+            ),
+          ]),
+      })
+    );
+  }
+
+  bloques.push(renderCatalogo(catalogo));
+
+  const hayParaRevisar = parecidas.length || filasSinUsar.length;
+  const cabecera = el('section', { class: 'panel revision-resumen' }, [
+    el('div', { class: 'panel-head' }, [
+      el('h2', { text: 'Revisión' }),
+      el('span', {
+        class: 'hint',
+        text: hayParaRevisar
+          ? 'Nada se toca solo: cada tarjeta abajo arranca cerrada, entrá a la que te interese.'
+          : '✓ No hay nombres repetidos ni nada sin usar. El catálogo está prolijo.',
+      }),
+    ]),
+  ]);
+  bloques.unshift(cabecera);
+  // La cabecera y el catálogo siempre están: lo único opcional son las tarjetas de hallazgos
+  return el('div', {}, bloques.filter(Boolean));
 }
 
 // ---------------------------------------------------------------- movimientos del mes
