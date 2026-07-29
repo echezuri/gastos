@@ -543,6 +543,89 @@ function renombrarSubcategoria(seccion, categoria, desde, hacia) {
   return { ok: true, movimientos: movimientos.length };
 }
 
+/** Qué hay adentro de una categoría, para poder mirarlo antes de moverlo. */
+function detalleDeCategoria(seccion, nombre) {
+  const celdas = leer('celdas')
+    .filter(function (c) { return texto(c.seccion) === seccion && texto(c.categoria) === nombre; })
+    .map(function (c) {
+      return { year: Number(c.anio), month: Number(c.mes), amount: numero(c.monto) || 0, kind: 'celda' };
+    });
+  const movs = leer('movimientos')
+    .filter(function (m) { return texto(m.seccion) === seccion && texto(m.categoria) === nombre; })
+    .map(function (m) {
+      return {
+        year: Number(m.anio), month: Number(m.mes), amount: Number(m.monto) || 0, kind: 'movimiento',
+        subcategory: texto(m.subcategoria), description: texto(m.descripcion), paid: bool(m.pagado) ? 1 : 0,
+      };
+    });
+  const todo = celdas.concat(movs).sort(function (a, b) { return a.year - b.year || a.month - b.month; });
+  return { items: todo, total: todo.reduce(function (t, x) { return t + x.amount; }, 0) };
+}
+
+/**
+ * Se lleva todo lo de una categoría a otra, dejándolo etiquetado.
+ *
+ * Es para los arrastres del sheet viejo: "OSPE" era una categoría de gastos fijos y en
+ * realidad es la prepaga, o sea Salud con subcategoría Prepaga y "OSPE" como descripción.
+ *
+ * Lo cargado a mano en la grilla se convierte en movimiento por el camino: una celda es un
+ * monto suelto y no admite subcategoría ni descripción, así que sin convertirla no habría
+ * dónde escribir eso. El importe y el mes no se tocan, así que los totales no se mueven.
+ */
+function reasignarCategoria(cuerpo) {
+  const seccion = texto(cuerpo.section);
+  const nombre = texto(cuerpo.name);
+  const aSeccion = texto(cuerpo.toSection) || seccion;
+  const aCategoria = texto(cuerpo.toCategory).trim();
+  const subcategoria = texto(cuerpo.subcategory).trim();
+  const descripcion = texto(cuerpo.description).trim();
+  if (SECCIONES.indexOf(aSeccion) < 0) throw new Error('Sección inválida: ' + aSeccion);
+  if (!aCategoria) throw new Error('Falta la categoría a la que mover');
+
+  const celdas = leer('celdas').filter(function (c) {
+    return texto(c.seccion) === seccion && texto(c.categoria) === nombre;
+  });
+  const nuevos = celdas.map(function (c) {
+    return {
+      anio: Number(c.anio), mes: Number(c.mes), dia: '',
+      tipo: aSeccion === 'ingresos' ? 'ingreso' : 'gasto',
+      seccion: aSeccion, categoria: aCategoria, subcategoria: subcategoria, descripcion: descripcion,
+      moneda: 'ARS', monto_moneda: '', cotizacion: '',
+      monto: numero(c.monto) || 0, pagado: true,
+    };
+  });
+
+  const movimientos = leer('movimientos').filter(function (m) {
+    return texto(m.seccion) === seccion && texto(m.categoria) === nombre;
+  });
+
+  const anios = {};
+  celdas.forEach(function (c) { anios[Number(c.anio)] = true; });
+  movimientos.forEach(function (m) { anios[Number(m.anio)] = true; });
+  Object.keys(anios).forEach(function (a) { asegurarCategoria(Number(a), aSeccion, aCategoria); });
+  guardarSubcategoria(aSeccion, aCategoria, subcategoria);
+
+  if (nuevos.length) insertarVarios('movimientos', nuevos);
+  movimientos.forEach(function (m) {
+    const cambios = { seccion: aSeccion, categoria: aCategoria, tipo: aSeccion === 'ingresos' ? 'ingreso' : 'gasto' };
+    // Lo que ya venía etiquetado no se pisa: sólo se completa lo que estaba vacío
+    if (subcategoria && !texto(m.subcategoria).trim()) cambios.subcategoria = subcategoria;
+    if (descripcion && !texto(m.descripcion).trim()) cambios.descripcion = descripcion;
+    actualizar('movimientos', m.id, cambios);
+  });
+
+  celdas.forEach(function (c) { borrar('celdas', c.id); });
+  borrarDonde('subcategorias', function (s) {
+    return texto(s.seccion) === seccion && texto(s.categoria) === nombre;
+  });
+  borrarDonde('categorias', function (c) {
+    return texto(c.seccion) === seccion && texto(c.nombre) === nombre;
+  });
+  dedupCategorias(aSeccion, aCategoria);
+
+  return { ok: true, convertidas: nuevos.length, movidos: movimientos.length };
+}
+
 /** Pasa una categoría entera de sección, en todos los años. */
 function moverCategoriaDeSeccion(seccion, nombre, aSeccion) {
   if (SECCIONES.indexOf(aSeccion) < 0) throw new Error('Sección inválida: ' + aSeccion);
@@ -704,6 +787,14 @@ function despachar(metodo, ruta, cuerpo) {
 
   if (camino === '/api/category/merge' && metodo === 'POST') {
     return fusionarCategoria(texto(cuerpo.section), texto(cuerpo.from), texto(cuerpo.to).trim());
+  }
+
+  if (camino === '/api/category/detail' && metodo === 'GET') {
+    return detalleDeCategoria(texto(params.section), texto(params.name));
+  }
+
+  if (camino === '/api/category/reassign' && metodo === 'POST') {
+    return reasignarCategoria(cuerpo);
   }
 
   if (camino === '/api/category/move' && metodo === 'POST') {

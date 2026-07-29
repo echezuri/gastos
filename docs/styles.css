@@ -1681,6 +1681,38 @@ tr.grupo-primero:first-child td {
   font-variant-numeric: tabular-nums;
 }
 
+/* El detalle de lo que se va a mover: mirar antes de tocar */
+.detalle-lista {
+  max-height: 180px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  font-variant-numeric: tabular-nums;
+}
+
+.detalle-fila {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--line);
+}
+
+.detalle-fila:last-child {
+  border-bottom: 0;
+}
+
+.detalle-tipo {
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .dialogo-pie {
   display: flex;
   justify-content: flex-end;

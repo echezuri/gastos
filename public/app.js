@@ -1032,30 +1032,69 @@ function campoRenombrar(valor, alGuardar, ancho = '100%') {
   return input;
 }
 
-/** Mete una categoría dentro de otra: los gastos se mudan y la vieja desaparece. */
-async function mudarCategoria(cat, catalogo) {
+/**
+ * Se lleva todos los gastos de una categoría a otra, dejándolos etiquetados.
+ *
+ * Para los arrastres del sheet viejo: "OSPE" era una categoría de gastos fijos y en
+ * realidad es Salud, subcategoría Prepaga, con "OSPE" de descripción. Muestra primero qué
+ * hay adentro, porque mover a ciegas 17 registros de cinco años no lo hace nadie tranquilo.
+ */
+async function moverGastos(cat, catalogo) {
+  let detalle;
+  try {
+    detalle = await api('GET', `/api/category/detail?section=${encodeURIComponent(cat.section)}&name=${encodeURIComponent(cat.name)}`);
+  } catch (err) {
+    toast(err.message, true);
+    return;
+  }
+
   const destinos = catalogo.filter((c) => !(c.section === cat.section && c.name === cat.name));
-  const select = el(
+  const destino = el(
     'select',
     { class: 'field-input' },
     destinos.map((c) => el('option', { value: `${c.section}|${c.name}`, text: `${SECTION_TITLE[c.section] || c.section} · ${c.name}` }))
   );
-  const elegido = await dialogo({
-    titulo: `Eliminar "${cat.name}"`,
-    hint: `Sus ${cat.celdas + cat.movs} registro(s) se mudan a la categoría que elijas y después desaparece. Los totales de cada mes no cambian.`,
-    contenido: [el('label', { class: 'field' }, [el('span', { text: 'Mover todo a' }), select])],
-    aceptar: 'Mover y eliminar',
-    leer: () => select.value,
+  const sub = el('input', { class: 'field-input', type: 'text', placeholder: 'ej. Prepaga' });
+  const desc = el('input', { class: 'field-input', type: 'text', value: cat.name, placeholder: 'ej. OSPE' });
+
+  const lista = el(
+    'div',
+    { class: 'detalle-lista' },
+    detalle.items.map((it) =>
+      el('div', { class: 'detalle-fila' }, [
+        el('span', { text: `${it.year} · ${MONTHS[it.month - 1]}` }),
+        el('span', { class: 'detalle-tipo', text: it.kind === 'celda' ? 'grilla' : it.subcategory || 'movimiento' }),
+        el('span', { class: 'num', text: money(it.amount) }),
+      ])
+    )
+  );
+
+  const plan = await dialogo({
+    titulo: `Mover los gastos de "${cat.name}"`,
+    hint: `${detalle.items.length} registro(s) · ${money(detalle.total)}. Conservan su importe y su mes, así que los totales no cambian. Los que están cargados a mano en la grilla pasan a ser movimientos, que es lo que permite ponerles subcategoría y descripción.`,
+    contenido: [
+      el('label', { class: 'field' }, [el('span', { text: 'Mover a' }), destino]),
+      el('label', { class: 'field' }, [el('span', { text: 'Subcategoría' }), sub]),
+      el('label', { class: 'field' }, [
+        el('span', { text: 'Descripción' }),
+        desc,
+        el('small', { class: 'field-hint', text: 'lo que ya tenga descripción propia no se pisa' }),
+      ]),
+      el('div', { class: 'field' }, [el('span', { text: 'Qué se mueve' }), lista]),
+    ],
+    aceptar: 'Mover',
+    leer: () => ({ destino: destino.value, subcategory: sub.value.trim(), description: desc.value.trim() }),
   });
-  if (!elegido) return;
-  const [seccion, nombre] = elegido.split('|');
+  if (!plan) return;
+
+  const [toSection, toCategory] = plan.destino.split('|');
   try {
-    if (seccion !== cat.section) {
-      await api('POST', '/api/category/move', { section: cat.section, name: cat.name, toSection: seccion });
-    }
-    await api('POST', '/api/category/merge', { section: seccion, from: cat.name, to: nombre });
+    const r = await api('POST', '/api/category/reassign', {
+      section: cat.section, name: cat.name, toSection, toCategory,
+      subcategory: plan.subcategory, description: plan.description,
+    });
     await refrescarPantalla();
-    toast(`Quedó "${nombre}"`);
+    toast(`${r.convertidas + r.movidos} gasto(s) en "${toCategory}"`);
   } catch (err) {
     toast(err.message, true);
   }
@@ -1082,9 +1121,17 @@ function renderCatalogo(catalogo) {
         el('td', { class: 'num', text: `${usos} uso(s)` }),
         amountCell(cat.total),
         el('td', { class: 'num actions-cell' }, [
-          el('button', { class: 'icon-btn', title: 'Mover a otra sección', text: '⇄', onclick: () => moveCategoryToSection(cat.section, cat.name) }),
+          el('button', { class: 'icon-btn', title: 'Mover la categoría entera a otra sección, con su nombre', text: '⇄', onclick: () => moveCategoryToSection(cat.section, cat.name) }),
+          usos
+            ? el('button', {
+                class: 'btn btn-small',
+                text: 'Mover gastos…',
+                title: 'Llevarlos a otra categoría, con subcategoría y descripción',
+                onclick: () => moverGastos(cat, catalogo),
+              })
+            : null,
           cat.celdas
-            ? el('button', { class: 'btn btn-small', text: 'Eliminar…', title: 'Tiene montos cargados en la grilla: hay que mudarlos', onclick: () => mudarCategoria(cat, catalogo) })
+            ? null
             : el('button', {
                 class: 'icon-btn danger',
                 text: '✕',

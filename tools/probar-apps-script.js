@@ -485,5 +485,49 @@ const conCeldas = huer.llamar('DELETE', '/api/category', { section: 'variables',
 comprobar('no deja borrar una categoría con montos en la grilla', Boolean(conCeldas.error), JSON.stringify(conCeldas));
 comprobar('y explica qué hacer en su lugar', /Eliminar/.test(conCeldas.error || ''), conCeldas.error);
 
+// ---------------------------------------------------------------- mover gastos
+
+// El caso real: "OSPE" era una categoría de gastos fijos y en realidad es la prepaga, o sea
+// Salud con subcategoría Prepaga. Sus montos están cargados a mano en la grilla, que no
+// admite subcategoría: hay que convertirlos por el camino, sin mover un peso.
+console.log('\nLlevarse los gastos de una categoría a otra, etiquetados\n');
+
+const mov = cargarLogica(crearAlmacen({}));
+[[2022, 3, 5000], [2022, 4, 5200], [2023, 5, 7000]].forEach(([a, m, v]) =>
+  mov.llamar('PUT', '/api/cell', { year: a, section: 'fijos', category: 'OSPE', month: m, amount: v })
+);
+mov.llamar('POST', '/api/movements', { year: 2023, month: 6, section: 'fijos', category: 'OSPE', subcategory: 'ya tenía', amount: 8000, paid: true, currency: 'ARS' });
+
+const totalDe = (a) => {
+  const y = mov.llamar('GET', `/api/year/${a}`);
+  return Object.values(y.sections).reduce((s, sec) => s + sec.categories.reduce((t, c) => t + c.months.reduce((q, v) => q + (v || 0), 0), 0), 0);
+};
+const antesDeMover = [totalDe(2022), totalDe(2023)];
+
+const detalle = mov.llamar('GET', '/api/category/detail?section=fijos&name=OSPE');
+comprobar('el detalle muestra todo lo que hay adentro', detalle.items.length === 4 && detalle.total === 25200, JSON.stringify(detalle.total));
+comprobar('y distingue la grilla de los movimientos', detalle.items.filter((i) => i.kind === 'celda').length === 3);
+
+const movido = mov.llamar('POST', '/api/category/reassign', {
+  section: 'fijos', name: 'OSPE', toSection: 'variables', toCategory: 'Salud', subcategory: 'Prepaga', description: 'OSPE',
+});
+comprobar('convierte las celdas y mueve los movimientos', movido.convertidas === 3 && movido.movidos === 1, JSON.stringify(movido));
+comprobar(
+  'sin mover un peso de ningún año',
+  totalDe(2022) === antesDeMover[0] && totalDe(2023) === antesDeMover[1],
+  `${[totalDe(2022), totalDe(2023)]} vs ${antesDeMover}`
+);
+comprobar('la categoría vieja desaparece', !mov.llamar('GET', '/api/year/2023').sections.fijos.categories.some((c) => c.name === 'OSPE'));
+
+const salud = mov.llamar('GET', '/api/year/2022').sections.variables.categories.find((c) => c.name === 'Salud');
+comprobar('lo de la grilla ahora tiene subcategoría', salud && salud.subs.Prepaga === 10200, JSON.stringify(salud && salud.subs));
+const unMovimiento = mov.llamar('GET', '/api/movements?year=2022&month=3').movements[0];
+comprobar('y descripción', unMovimiento.description === 'OSPE' && unMovimiento.subcategory === 'Prepaga', JSON.stringify(unMovimiento));
+comprobar('lo convertido queda pagado, si no no sumaría', unMovimiento.paid === 1);
+
+// Lo que ya venía etiquetado conserva lo suyo: la etiqueta nueva sólo completa lo vacío
+const yaTenia = mov.llamar('GET', '/api/movements?year=2023&month=6').movements[0];
+comprobar('no pisa la subcategoría de lo que ya la tenía', yaTenia.subcategory === 'ya tenía', JSON.stringify(yaTenia));
+
 console.log(`\n${pruebas} comprobaciones, ${fallas} con problema.`);
 process.exit(fallas ? 1 : 0);
