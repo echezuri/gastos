@@ -529,5 +529,62 @@ comprobar('lo convertido queda pagado, si no no sumaría', unMovimiento.paid ===
 const yaTenia = mov.llamar('GET', '/api/movements?year=2023&month=6').movements[0];
 comprobar('no pisa la subcategoría de lo que ya la tenía', yaTenia.subcategory === 'ya tenía', JSON.stringify(yaTenia));
 
+// ---------------------------------------------------------------- reubicar de a uno
+
+// "Mover gastos…" manda todo junto al mismo lado. Esto es para cuando cada gasto de una
+// categoría va a un lugar distinto: se reubica uno por vez, sin tocar los demás.
+console.log('\nReubicar un solo gasto, sin mover el resto\n');
+
+const reub = cargarLogica(crearAlmacen({}));
+reub.llamar('PUT', '/api/cell', { year: 2022, section: 'fijos', category: 'OSPE', month: 3, amount: 5000 });
+reub.llamar('POST', '/api/movements', { year: 2022, month: 4, section: 'fijos', category: 'OSPE', subcategory: 'x', amount: 6000, paid: true, currency: 'ARS' });
+
+const detalleOspe = reub.llamar('GET', '/api/category/detail?section=fijos&name=OSPE');
+comprobar('el detalle trae el id de cada ítem', detalleOspe.items.every((i) => Number.isInteger(i.id)), JSON.stringify(detalleOspe.items));
+
+const idCelda = detalleOspe.items.find((i) => i.kind === 'celda').id;
+const idMov = detalleOspe.items.find((i) => i.kind === 'movimiento').id;
+
+const r1 = reub.llamar('POST', '/api/item/relocate', { id: idCelda, kind: 'celda', year: 2022, toSection: 'variables', toCategory: 'Salud', subcategory: 'Prepaga', description: 'OSPE' });
+comprobar('reubica la celda convirtiéndola en movimiento', r1.convertida === true, JSON.stringify(r1));
+
+const r2 = reub.llamar('POST', '/api/item/relocate', { id: idMov, kind: 'movimiento', toSection: 'variables', toCategory: 'Otros', subcategory: '', description: 'algo' });
+comprobar('reubica el movimiento sin convertirlo', r2.convertida === false, JSON.stringify(r2));
+
+const salud2022 = reub.llamar('GET', '/api/year/2022').sections.variables.categories.find((c) => c.name === 'Salud');
+const otros2022 = reub.llamar('GET', '/api/year/2022').sections.variables.categories.find((c) => c.name === 'Otros');
+comprobar('cada uno llegó a un destino distinto', salud2022.months[2] === 5000 && otros2022.months[3] === 6000, `${salud2022 && salud2022.months[2]} / ${otros2022 && otros2022.months[3]}`);
+comprobar('el que fue a Salud lleva su subcategoría', salud2022.subs.Prepaga === 5000, JSON.stringify(salud2022.subs));
+comprobar('el que fue a Otros deja su subcategoría vieja', reub.llamar('GET', '/api/movements?year=2022&month=4').movements[0].subcategory === '');
+comprobar('OSPE queda sin nada adentro', reub.llamar('GET', '/api/category/detail?section=fijos&name=OSPE').items.length === 0);
+
+comprobar('sección inválida se rechaza', Boolean(reub.llamar('POST', '/api/item/relocate', { id: 1, kind: 'movimiento', toSection: 'rara', toCategory: 'X' }).error));
+comprobar('sin categoría de destino se rechaza', Boolean(reub.llamar('POST', '/api/item/relocate', { id: 1, kind: 'movimiento', toSection: 'variables', toCategory: '' }).error));
+
+comprobar('detalle de una sola subcategoría no trae las otras', (() => {
+  const solo = cargarLogica(crearAlmacen({}));
+  solo.llamar('POST', '/api/movements', { year: 2026, month: 1, section: 'variables', category: 'Casa', subcategory: 'Luz', amount: 100, paid: true, currency: 'ARS' });
+  solo.llamar('POST', '/api/movements', { year: 2026, month: 1, section: 'variables', category: 'Casa', subcategory: 'Gas', amount: 200, paid: true, currency: 'ARS' });
+  const d = solo.llamar('GET', '/api/category/detail?section=variables&name=Casa&subcategory=Luz');
+  return d.items.length === 1 && d.total === 100;
+})());
+
+comprobar('crear una subcategoría suelta la deja en el catálogo', (() => {
+  const cr = cargarLogica(crearAlmacen({}));
+  cr.llamar('POST', '/api/category', { year: 2026, section: 'variables', name: 'Salud' });
+  cr.llamar('POST', '/api/subcategory', { section: 'variables', category: 'Salud', name: 'Dentista' });
+  return cr.llamar('GET', '/api/subcategories').subcategories.some((s) => s.category === 'Salud' && s.name === 'Dentista');
+})());
+
+// Un huérfano ya tiene su lugar (Pendientes) y no tiene que resucitar una fila fantasma
+// en el catálogo: eso confundía "categoría real" con "texto suelto de un movimiento".
+comprobar('un huérfano no aparece como categoría en el catálogo', (() => {
+  const f = cargarLogica(crearAlmacen({}));
+  f.llamar('POST', '/api/movements', { year: 2026, month: 3, section: 'fijos', category: 'Vieja', amount: 1000, paid: true, currency: 'ARS' });
+  f.llamar('DELETE', '/api/category', { section: 'fijos', name: 'Vieja' }); // sin celdas: queda huérfano
+  const cat = f.llamar('GET', '/api/revision').catalogo;
+  return !cat.some((c) => c.name === 'Vieja');
+})());
+
 console.log(`\n${pruebas} comprobaciones, ${fallas} con problema.`);
 process.exit(fallas ? 1 : 0);

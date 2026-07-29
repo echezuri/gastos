@@ -873,8 +873,10 @@ async function cellsToMovements(section, category) {
 async function removeCategory(section, name) {
   const cat = findCategory(section, name);
   const moves = cat ? sum(cat.moves) : 0;
-  const extra = moves ? ` y sus ${moves} movimiento(s)` : '';
-  if (!confirm(`¿Borrar "${name}"${extra} de ${state.year}?`)) return;
+  const extra = moves ? ` — sus ${moves} movimiento(s) de este año quedan en Pendientes esperando categoría` : '';
+  // Se borra en todos los años, no sólo en el que estás mirando: para elegir a dónde va
+  // cada gasto en vez de que caigan sueltos, usá "Eliminar…" desde Revisión.
+  if (!confirmarBorrado(`"${name}"${extra}`)) return;
   try {
     await apiMutar('DELETE', '/api/category', { year: state.year, section, name });
   } catch (err) {
@@ -1033,13 +1035,119 @@ function campoRenombrar(valor, alGuardar, ancho = '100%') {
 }
 
 /**
- * Se lleva todos los gastos de una categoría a otra, dejándolos etiquetados.
+ * Una fila del detalle, con a dónde va ese registro puntual.
  *
- * Para los arrastres del sheet viejo: "OSPE" era una categoría de gastos fijos y en
- * realidad es Salud, subcategoría Prepaga, con "OSPE" de descripción. Muestra primero qué
- * hay adentro, porque mover a ciegas 17 registros de cinco años no lo hace nadie tranquilo.
+ * `opcionSinTocar`: la etiqueta de la opción "no lo cambies", o null si no corresponde
+ * ofrecerla. Una celda cargada a mano en la grilla nunca la tiene: sin categoría no habría
+ * dónde guardar su historia, así que siempre pide un destino real.
  */
-async function moverGastos(cat, catalogo) {
+function filaDeReubicacion(it, catalogo, opcionSinTocar) {
+  // Value '' significa "todavía sin elegir": para un movimiento es válido (queda como
+  // está), para una celda no (siempre necesita un destino real, se valida al confirmar).
+  const puedeQuedarse = Boolean(opcionSinTocar) && it.kind === 'movimiento';
+  const opciones = [
+    el('option', { value: '', text: puedeQuedarse ? opcionSinTocar : '— elegí una categoría —' }),
+    ...catalogo.map((c) => el('option', { value: `${c.section}|${c.name}`, text: `${SECTION_TITLE[c.section] || c.section} · ${c.name}` })),
+  ];
+  const destino = el('select', { class: 'field-input' }, opciones);
+  const sub = el('input', { class: 'field-input', type: 'text', value: it.subcategory || '', placeholder: 'subcategoría' });
+  const desc = el('input', { class: 'field-input', type: 'text', value: it.description || '', placeholder: 'descripción' });
+
+  const actualizar = () => {
+    const tieneDestino = destino.value !== '';
+    sub.disabled = !tieneDestino;
+    desc.disabled = !tieneDestino;
+  };
+  destino.addEventListener('change', actualizar);
+  actualizar();
+
+  const fila = el('div', { class: 'reubicar-fila' }, [
+    el('div', { class: 'reubicar-cab' }, [
+      el('span', { text: `${it.year} · ${MONTHS[it.month - 1]}${it.kind === 'celda' ? ' · grilla' : ''}` }),
+      el('span', { class: 'num', text: money(it.amount) }),
+    ]),
+    destino,
+    el('div', { class: 'reubicar-campos' }, [sub, desc]),
+  ]);
+  return { fila, it, destino, sub, desc };
+}
+
+/**
+ * El detalle completo de lo que se va a mover, con un destino elegible para cada registro.
+ *
+ * 17 filas de a una serían un embole: arriba hay un atajo que llena todas las que no
+ * tocaste. Después se puede ajustar cualquiera a mano antes de confirmar.
+ */
+async function reubicarConDetalle({ titulo, hint, items, catalogo, opcionSinTocar }) {
+  const filas = items.map((it) => filaDeReubicacion(it, catalogo, opcionSinTocar));
+
+  const masivoDestino = el(
+    'select',
+    { class: 'field-input' },
+    [el('option', { value: '', text: '— elegir —' }), ...catalogo.map((c) => el('option', { value: `${c.section}|${c.name}`, text: `${SECTION_TITLE[c.section] || c.section} · ${c.name}` }))]
+  );
+  const masivoSub = el('input', { class: 'field-input', type: 'text', placeholder: 'subcategoría' });
+  const masivoDesc = el('input', { class: 'field-input', type: 'text', placeholder: 'descripción' });
+
+  const plan = await dialogo({
+    titulo,
+    hint,
+    contenido: [
+      el('div', { class: 'reubicar-masivo' }, [
+        el('span', { class: 'hint', text: 'Para llenarlas todas de una:' }),
+        masivoDestino,
+        masivoSub,
+        masivoDesc,
+        el('button', {
+          class: 'btn btn-ghost',
+          type: 'button',
+          text: 'Aplicar a todas',
+          onclick: () => {
+            if (!masivoDestino.value) return;
+            filas.forEach(({ destino, sub, desc }) => {
+              destino.value = masivoDestino.value;
+              sub.value = masivoSub.value;
+              desc.value = masivoDesc.value;
+              destino.dispatchEvent(new Event('change'));
+            });
+          },
+        }),
+      ]),
+      el('div', { class: 'reubicar-lista' }, filas.map((f) => f.fila)),
+    ],
+    aceptar: 'Confirmar',
+    leer: () => filas.map(({ it, destino, sub, desc }) => ({ it, destino: destino.value, subcategory: sub.value.trim(), description: desc.value.trim() })),
+  });
+  if (!plan) return { hecho: false };
+
+  const faltaElegir = plan.find((p) => p.it.kind === 'celda' && !p.destino);
+  if (faltaElegir) {
+    toast('Lo cargado en la grilla necesita una categoría de destino', true);
+    return { hecho: false };
+  }
+  return { hecho: true, plan };
+}
+
+/** Manda cada registro a donde se eligió. Lo que quedó "sin tocar" no se toca. */
+async function aplicarReubicacion(plan) {
+  for (const p of plan) {
+    if (!p.destino) continue;
+    const [toSection, toCategory] = p.destino.split('|');
+    await api('POST', '/api/item/relocate', {
+      id: p.it.id, kind: p.it.kind, year: p.it.year,
+      toSection, toCategory, subcategory: p.subcategory, description: p.description,
+    });
+  }
+}
+
+/**
+ * Eliminar una categoría con uso: primero el detalle completo, con a dónde va cada uno.
+ *
+ * Lo que se deje "sin categorizar" no se pierde: cae en Pendientes, en gris, con el
+ * nombre viejo, hasta que lo encasilles desde ahí. Lo cargado en la grilla no tiene esa
+ * salida (no hay dónde guardar su historia sin categoría) y siempre pide un destino real.
+ */
+async function eliminarCategoria(cat, catalogo) {
   let detalle;
   try {
     detalle = await api('GET', `/api/category/detail?section=${encodeURIComponent(cat.section)}&name=${encodeURIComponent(cat.name)}`);
@@ -1048,53 +1156,69 @@ async function moverGastos(cat, catalogo) {
     return;
   }
 
+  if (!detalle.items.length) {
+    if (!confirmarBorrado(`la categoría "${cat.name}" (está vacía)`)) return;
+    try {
+      await api('DELETE', '/api/category', { section: cat.section, name: cat.name });
+      await refrescarPantalla();
+      toast('Eliminada');
+    } catch (err) {
+      toast(err.message, true);
+    }
+    return;
+  }
+
   const destinos = catalogo.filter((c) => !(c.section === cat.section && c.name === cat.name));
-  const destino = el(
-    'select',
-    { class: 'field-input' },
-    destinos.map((c) => el('option', { value: `${c.section}|${c.name}`, text: `${SECTION_TITLE[c.section] || c.section} · ${c.name}` }))
-  );
-  const sub = el('input', { class: 'field-input', type: 'text', placeholder: 'ej. Prepaga' });
-  const desc = el('input', { class: 'field-input', type: 'text', value: cat.name, placeholder: 'ej. OSPE' });
-
-  const lista = el(
-    'div',
-    { class: 'detalle-lista' },
-    detalle.items.map((it) =>
-      el('div', { class: 'detalle-fila' }, [
-        el('span', { text: `${it.year} · ${MONTHS[it.month - 1]}` }),
-        el('span', { class: 'detalle-tipo', text: it.kind === 'celda' ? 'grilla' : it.subcategory || 'movimiento' }),
-        el('span', { class: 'num', text: money(it.amount) }),
-      ])
-    )
-  );
-
-  const plan = await dialogo({
-    titulo: `Mover los gastos de "${cat.name}"`,
-    hint: `${detalle.items.length} registro(s) · ${money(detalle.total)}. Conservan su importe y su mes, así que los totales no cambian. Los que están cargados a mano en la grilla pasan a ser movimientos, que es lo que permite ponerles subcategoría y descripción.`,
-    contenido: [
-      el('label', { class: 'field' }, [el('span', { text: 'Mover a' }), destino]),
-      el('label', { class: 'field' }, [el('span', { text: 'Subcategoría' }), sub]),
-      el('label', { class: 'field' }, [
-        el('span', { text: 'Descripción' }),
-        desc,
-        el('small', { class: 'field-hint', text: 'lo que ya tenga descripción propia no se pisa' }),
-      ]),
-      el('div', { class: 'field' }, [el('span', { text: 'Qué se mueve' }), lista]),
-    ],
-    aceptar: 'Mover',
-    leer: () => ({ destino: destino.value, subcategory: sub.value.trim(), description: desc.value.trim() }),
+  const r = await reubicarConDetalle({
+    titulo: `Eliminar "${cat.name}"`,
+    hint: `${detalle.items.length} registro(s) · ${money(detalle.total)}. Conservan su importe y su mes: los totales no cambian.`,
+    items: detalle.items,
+    catalogo: destinos,
+    opcionSinTocar: '— Sin categorizar (queda en Pendientes) —',
   });
-  if (!plan) return;
-
-  const [toSection, toCategory] = plan.destino.split('|');
+  if (!r.hecho) return;
   try {
-    const r = await api('POST', '/api/category/reassign', {
-      section: cat.section, name: cat.name, toSection, toCategory,
-      subcategory: plan.subcategory, description: plan.description,
-    });
+    await aplicarReubicacion(r.plan);
+    await api('DELETE', '/api/category', { section: cat.section, name: cat.name });
     await refrescarPantalla();
-    toast(`${r.convertidas + r.movidos} gasto(s) en "${toCategory}"`);
+    toast(`"${cat.name}" eliminada`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/**
+ * Eliminar una subcategoría con uso: mismo detalle, pero acá "sin tocar" es de verdad un
+ * no-op — la categoría no se borra, así que el texto viejo sigue siendo válido aunque ya
+ * no esté en el catálogo.
+ */
+async function eliminarSubcategoria(cat, sub, catalogo) {
+  if (!sub.movs) return borrarSubcategorias(cat.section, cat.name, sub.name);
+
+  let detalle;
+  try {
+    detalle = await api(
+      'GET',
+      `/api/category/detail?section=${encodeURIComponent(cat.section)}&name=${encodeURIComponent(cat.name)}&subcategory=${encodeURIComponent(sub.name)}`
+    );
+  } catch (err) {
+    toast(err.message, true);
+    return;
+  }
+
+  const r = await reubicarConDetalle({
+    titulo: `Eliminar "${sub.name}"`,
+    hint: `${detalle.items.length} movimiento(s) · ${money(detalle.total)} en "${cat.name}". Lo que dejes "sin tocar" conserva "${sub.name}" como texto, aunque salga del catálogo.`,
+    items: detalle.items,
+    catalogo: catalogo,
+    opcionSinTocar: '— Dejar como está —',
+  });
+  if (!r.hecho) return;
+  try {
+    await aplicarReubicacion(r.plan);
+    await api('DELETE', '/api/subcategory', { section: cat.section, category: cat.name, name: sub.name });
+    await refrescarPantalla();
+    toast(`"${sub.name}" eliminada`);
   } catch (err) {
     toast(err.message, true);
   }
@@ -1106,11 +1230,28 @@ async function moverGastos(cat, catalogo) {
  * Es la pantalla para ordenar los nombres. Renombrar se escribe encima; eliminar siempre
  * pregunta a dónde se mudan los gastos, así no hay forma de perder plata sin querer.
  */
-function renderCatalogo(catalogo) {
-  if (!catalogo || !catalogo.length) return null;
+/** La fila para crear una subcategoría suelta, sin necesidad de cargar un gasto primero. */
+function filaCrearSubcategoria(cat) {
+  const input = el('input', { class: 'add-input', type: 'text', placeholder: '+ nueva subcategoría' });
+  input.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || !input.value.trim()) return;
+    try {
+      await api('POST', '/api/subcategory', { section: cat.section, category: cat.name, name: input.value.trim() });
+      await refrescarPantalla();
+      toast('Creada');
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  return el('tr', { class: 'add-row fila-sub' }, [
+    el('td', { class: 'col-label' }),
+    el('td', { colspan: '4' }, [input]),
+  ]);
+}
 
+function renderCatalogo(catalogo) {
   const filas = [];
-  for (const cat of catalogo) {
+  for (const cat of catalogo || []) {
     const usos = cat.celdas + cat.movs;
     filas.push(
       el('tr', { class: 'grupo-primero' }, [
@@ -1122,31 +1263,12 @@ function renderCatalogo(catalogo) {
         amountCell(cat.total),
         el('td', { class: 'num actions-cell' }, [
           el('button', { class: 'icon-btn', title: 'Mover la categoría entera a otra sección, con su nombre', text: '⇄', onclick: () => moveCategoryToSection(cat.section, cat.name) }),
-          usos
-            ? el('button', {
-                class: 'btn btn-small',
-                text: 'Mover gastos…',
-                title: 'Llevarlos a otra categoría, con subcategoría y descripción',
-                onclick: () => moverGastos(cat, catalogo),
-              })
-            : null,
-          cat.celdas
-            ? null
-            : el('button', {
-                class: 'icon-btn danger',
-                text: '✕',
-                title: cat.movs ? `Eliminar. Sus ${cat.movs} gasto(s) van a Pendientes esperando categoría` : 'Eliminar (está vacía)',
-                onclick: async () => {
-                  if (cat.movs && !confirm(`¿Eliminar "${cat.name}"?\n\nSus ${cat.movs} gasto(s) no se borran: quedan en Pendientes, en gris, hasta que les elijas categoría. Mientras tanto no suman.`)) return;
-                  try {
-                    await api('DELETE', '/api/category', { section: cat.section, name: cat.name });
-                    await refrescarPantalla();
-                    toast(cat.movs ? `${cat.movs} gasto(s) esperan en Pendientes` : 'Eliminada');
-                  } catch (err) {
-                    toast(err.message, true);
-                  }
-                },
-              }),
+          el('button', {
+            class: 'icon-btn danger',
+            text: '✕',
+            title: usos ? `Eliminar. Vas a elegir a dónde va cada uno de sus ${usos} registro(s)` : 'Eliminar (está vacía)',
+            onclick: () => eliminarCategoria(cat, catalogo),
+          }),
         ]),
       ])
     );
@@ -1171,21 +1293,42 @@ function renderCatalogo(catalogo) {
               : el('button', {
                   class: 'icon-btn danger',
                   text: '✕',
-                  title: sub.movs ? 'Sale del catálogo; los movimientos conservan el texto' : 'Borrar del catálogo',
-                  onclick: () => borrarSubcategorias(cat.section, cat.name, sub.name),
+                  title: sub.movs ? `Eliminar. Vas a elegir a dónde va cada uno de sus ${sub.movs} movimiento(s)` : 'Borrar del catálogo (sin uso)',
+                  onclick: () => eliminarSubcategoria(cat, sub, catalogo),
                 }),
           ]),
         ])
       );
     }
+    filas.push(filaCrearSubcategoria(cat));
   }
+
+  // Crear una categoría nueva de cero, sin tener que cargar un gasto primero
+  const seccionNueva = el('select', { class: 'field-input' }, SECTIONS.map((s) => el('option', { value: s.key, text: s.title })));
+  const nombreNuevo = el('input', { class: 'add-input', type: 'text', placeholder: '+ nueva categoría' });
+  nombreNuevo.addEventListener('keydown', async (e) => {
+    if (e.key !== 'Enter' || !nombreNuevo.value.trim()) return;
+    try {
+      await api('POST', '/api/category', { year: state.year, section: seccionNueva.value, name: nombreNuevo.value.trim() });
+      await refrescarPantalla();
+      nombreNuevo.value = '';
+      toast(`Creada en ${state.year}`);
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 
   return el('section', { class: 'panel' }, [
     el('div', { class: 'panel-head' }, [
       el('h2', { text: 'Categorías y subcategorías' }),
-      el('span', { class: 'hint', text: `${catalogo.length} categorías · escribí encima para renombrar` }),
+      el('span', { class: 'hint', text: `${(catalogo || []).length} categorías · escribí encima para renombrar` }),
     ]),
-    el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, filas)])]),
+    catalogo && catalogo.length ? el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, filas)])]) : null,
+    el('div', { class: 'catalogo-crear' }, [
+      seccionNueva,
+      nombreNuevo,
+      el('small', { class: 'field-hint', text: `se crea para ${state.year}; si cargás en otro año se agrega sola` }),
+    ]),
   ]);
 }
 
@@ -1301,11 +1444,11 @@ function renderRevision() {
           el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.name })]),
           el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: v.years.join(', ') })]),
           el('td', { class: 'num' }, [
-            // No tiene nada adentro: se puede borrar sin preguntar por los movimientos
             el('button', {
               class: 'btn btn-small',
               text: 'Borrar',
               onclick: async () => {
+                if (!confirmarBorrado(`"${v.name}" (está vacía, no tiene nada adentro)`)) return;
                 try {
                   for (const anio of v.years) {
                     await api('DELETE', '/api/category', { year: anio, section: v.section, name: v.name });
@@ -2585,6 +2728,7 @@ function renderAuto() {
             text: '✕',
             title: 'Borrar',
             onclick: async () => {
+              if (!confirmarBorrado(`el service de ${s.detalle || money(s.precio_ars) || 'este auto'}`)) return;
               await api('DELETE', `/api/rows/services/${s.id}`);
               await loadAuto();
             },
@@ -2684,7 +2828,9 @@ function renderAuto() {
                       el('button', {
                         class: 'icon-btn danger',
                         text: '✕',
+                        title: 'Borrar',
                         onclick: async () => {
+                          if (!confirmarBorrado(`"${p.item || 'este ítem'}" del plan`)) return;
                           await api('DELETE', `/api/rows/service_plan/${p.id}`);
                           await loadAuto();
                         },
@@ -2774,7 +2920,9 @@ function renderQuinta() {
         el('button', {
           class: 'icon-btn danger',
           text: '✕',
+          title: 'Borrar',
           onclick: async () => {
+            if (!confirmarBorrado(`"${item.detalle || 'este ítem'}"`)) return;
             await api('DELETE', `/api/rows/quinta_items/${item.id}`);
             await loadQuinta();
           },
@@ -2818,7 +2966,9 @@ function renderQuinta() {
             el('button', {
               class: 'icon-btn danger',
               text: '✕',
+              title: 'Borrar',
               onclick: async () => {
+                if (!confirmarBorrado(`"${todo.texto || 'este pendiente'}"`)) return;
                 await api('DELETE', `/api/rows/quinta_todos/${todo.id}`);
                 await loadQuinta();
               },

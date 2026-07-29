@@ -249,13 +249,22 @@ function revisarDatos() {
     if (bool(m.pagado)) u.total += Number(m.monto) || 0;
   });
 
-  const lista = Object.keys(usos).map(function (k) {
-    const u = usos[k];
-    return {
-      section: u.section, name: u.name, celdas: u.celdas, movs: u.movs, total: u.total,
-      years: Object.keys(u.years).map(Number).sort(),
-    };
-  });
+  // Un movimiento huérfano (categoría borrada) sigue diciendo de qué categoría venía, y sin
+  // este filtro eso resucitaba una fila fantasma en el catálogo: mismo aspecto que una
+  // categoría real, pero sin nada declarado detrás. El catálogo es "lo que existe"; un
+  // huérfano ya tiene su lugar, que es Pendientes.
+  const declaradas = {};
+  categorias.forEach(function (c) { declaradas[texto(c.seccion) + '|' + texto(c.nombre)] = true; });
+
+  const lista = Object.keys(usos)
+    .filter(function (k) { return declaradas[k]; })
+    .map(function (k) {
+      const u = usos[k];
+      return {
+        section: u.section, name: u.name, celdas: u.celdas, movs: u.movs, total: u.total,
+        years: Object.keys(u.years).map(Number).sort(),
+      };
+    });
 
   // Nombres distintos para lo mismo. Se comparan entre secciones también: así aparece la
   // categoría que quedó cargada en dos lados.
@@ -543,18 +552,28 @@ function renombrarSubcategoria(seccion, categoria, desde, hacia) {
   return { ok: true, movimientos: movimientos.length };
 }
 
-/** Qué hay adentro de una categoría, para poder mirarlo antes de moverlo. */
-function detalleDeCategoria(seccion, nombre) {
-  const celdas = leer('celdas')
-    .filter(function (c) { return texto(c.seccion) === seccion && texto(c.categoria) === nombre; })
-    .map(function (c) {
-      return { year: Number(c.anio), month: Number(c.mes), amount: numero(c.monto) || 0, kind: 'celda' };
-    });
+/**
+ * Qué hay adentro de una categoría (o de una subcategoría sola), para poder mirarlo antes
+ * de moverlo o borrarlo. Cada ítem trae su id, así la pantalla puede reubicarlos de a uno.
+ */
+function detalleDeCategoria(seccion, nombre, subcategoria) {
+  // subcategoria acota a una sola; sin ella, todo lo de la categoría
+  const sub = subcategoria === undefined || subcategoria === null ? null : texto(subcategoria);
+  const celdas = sub
+    ? [] // una celda es un monto suelto: no pertenece a ninguna subcategoría
+    : leer('celdas')
+        .filter(function (c) { return texto(c.seccion) === seccion && texto(c.categoria) === nombre; })
+        .map(function (c) {
+          return { id: Number(c.id), year: Number(c.anio), month: Number(c.mes), amount: numero(c.monto) || 0, kind: 'celda' };
+        });
   const movs = leer('movimientos')
-    .filter(function (m) { return texto(m.seccion) === seccion && texto(m.categoria) === nombre; })
+    .filter(function (m) {
+      if (texto(m.seccion) !== seccion || texto(m.categoria) !== nombre) return false;
+      return sub === null || texto(m.subcategoria) === sub;
+    })
     .map(function (m) {
       return {
-        year: Number(m.anio), month: Number(m.mes), amount: Number(m.monto) || 0, kind: 'movimiento',
+        id: Number(m.id), year: Number(m.anio), month: Number(m.mes), amount: Number(m.monto) || 0, kind: 'movimiento',
         subcategory: texto(m.subcategoria), description: texto(m.descripcion), paid: bool(m.pagado) ? 1 : 0,
       };
     });
@@ -624,6 +643,49 @@ function reasignarCategoria(cuerpo) {
   dedupCategorias(aSeccion, aCategoria);
 
   return { ok: true, convertidas: nuevos.length, movidos: movimientos.length };
+}
+
+/**
+ * Reubica un solo gasto: la categoría entera ya tiene "Mover gastos…", pero cuando cada
+ * uno va a un lado distinto hace falta elegirlo de a uno.
+ *
+ * Una celda no tiene id de movimiento: se identifica por año+mes y se convierte en
+ * movimiento al reubicarla, porque el destino puede pedirle subcategoría y descripción,
+ * que una celda no tiene dónde guardar. El importe no se toca.
+ */
+function reubicarItem(cuerpo) {
+  const aSeccion = texto(cuerpo.toSection);
+  const aCategoria = texto(cuerpo.toCategory).trim();
+  const subcategoria = texto(cuerpo.subcategory).trim();
+  const descripcion = texto(cuerpo.description).trim();
+  if (SECCIONES.indexOf(aSeccion) < 0) throw new Error('Sección inválida: ' + aSeccion);
+  if (!aCategoria) throw new Error('Falta la categoría a la que mover');
+
+  const tipo = aSeccion === 'ingresos' ? 'ingreso' : 'gasto';
+  asegurarCategoria(Number(cuerpo.year), aSeccion, aCategoria);
+  guardarSubcategoria(aSeccion, aCategoria, subcategoria);
+
+  if (texto(cuerpo.kind) === 'celda') {
+    const celda = leer('celdas').filter(function (c) { return Number(c.id) === Number(cuerpo.id); })[0];
+    if (!celda) throw new Error('Esa celda ya no está');
+    insertar('movimientos', {
+      anio: Number(celda.anio), mes: Number(celda.mes), dia: '',
+      tipo: tipo, seccion: aSeccion, categoria: aCategoria,
+      subcategoria: subcategoria, descripcion: descripcion,
+      moneda: 'ARS', monto_moneda: '', cotizacion: '',
+      monto: numero(celda.monto) || 0, pagado: true,
+    });
+    borrar('celdas', celda.id);
+    return { ok: true, convertida: true };
+  }
+
+  const mov = leer('movimientos').filter(function (m) { return Number(m.id) === Number(cuerpo.id); })[0];
+  if (!mov) throw new Error('Ese movimiento ya no está');
+  actualizar('movimientos', mov.id, {
+    seccion: aSeccion, categoria: aCategoria, tipo: tipo,
+    subcategoria: subcategoria, descripcion: descripcion,
+  });
+  return { ok: true, convertida: false };
 }
 
 /** Pasa una categoría entera de sección, en todos los años. */
@@ -790,11 +852,20 @@ function despachar(metodo, ruta, cuerpo) {
   }
 
   if (camino === '/api/category/detail' && metodo === 'GET') {
-    return detalleDeCategoria(texto(params.section), texto(params.name));
+    return detalleDeCategoria(texto(params.section), texto(params.name), params.subcategory);
   }
 
   if (camino === '/api/category/reassign' && metodo === 'POST') {
     return reasignarCategoria(cuerpo);
+  }
+
+  if (camino === '/api/item/relocate' && metodo === 'POST') {
+    return reubicarItem(cuerpo);
+  }
+
+  if (camino === '/api/subcategory' && metodo === 'POST') {
+    guardarSubcategoria(texto(cuerpo.section), texto(cuerpo.category), texto(cuerpo.name).trim());
+    return { ok: true };
   }
 
   if (camino === '/api/category/move' && metodo === 'POST') {
