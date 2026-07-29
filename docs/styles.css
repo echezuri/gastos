@@ -147,74 +147,6 @@ body {
   border-radius: 999px;
 }
 
-/* ---------- tarjetas de resumen ---------- */
-
-.kpis {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.kpi {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 11px 15px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-  text-align: left;
-}
-
-.kpi-label {
-  font-size: 11px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--ink-soft);
-}
-
-.kpi-value {
-  font-size: 21px;
-  font-weight: 650;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-}
-
-.kpi-sub {
-  font-size: 12px;
-  color: var(--ink-soft);
-  font-variant-numeric: tabular-nums;
-}
-
-.kpi.is-pos .kpi-value {
-  color: var(--pos);
-}
-
-.kpi.is-neg .kpi-value {
-  color: var(--neg);
-}
-
-.kpi-button {
-  font: inherit;
-  color: inherit;
-  cursor: pointer;
-}
-
-.kpi.is-pending {
-  border-color: #d08c1c;
-}
-
-.kpi.is-pending .kpi-value,
-.kpi.is-pending .kpi-label {
-  color: #d08c1c;
-}
-
-.kpi-button:hover {
-  border-color: var(--accent);
-}
-
 .brand {
   display: flex;
   align-items: center;
@@ -763,9 +695,15 @@ tfoot .col-label {
 
 .chart-grid {
   display: grid;
-  grid-template-columns: 2fr 1fr;
+  grid-template-columns: 1fr 1fr;
   gap: 1px;
   background: var(--line);
+}
+
+/* Si queda un gráfico solo (el mes sin drill-down, o el último de una cantidad impar),
+   ocupa las dos columnas en vez de dejar la mitad de la fila vacía al costado. */
+.chart-grid > *:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 @media (max-width: 940px) {
@@ -858,8 +796,8 @@ tfoot .col-label {
    teléfono: la lista es la que se lee, el anillo da la proporción de un vistazo. */
 .torta-caja {
   display: grid;
-  grid-template-columns: minmax(150px, 210px) 1fr;
-  gap: 14px;
+  grid-template-columns: minmax(180px, 260px) 1fr;
+  gap: 16px;
   align-items: center;
 }
 
@@ -873,7 +811,7 @@ tfoot .col-label {
 .torta-total {
   fill: var(--ink);
   font-family: inherit;
-  font-size: 15px;
+  font-size: 18px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -881,7 +819,7 @@ tfoot .col-label {
 .torta-total-pie {
   fill: var(--ink-soft);
   font-family: inherit;
-  font-size: 10px;
+  font-size: 11px;
 }
 
 .torta-porcion {
@@ -1367,8 +1305,16 @@ tfoot .col-label {
   color: #d08c1c;
 }
 
+/* Un gasto sin pagar no suma al total: se ve como algo en pausa, no como uno más de la
+   lista. Grisáceo además de tenue, como un control deshabilitado. */
 tr.is-pending {
-  opacity: 0.6;
+  opacity: 0.52;
+  filter: saturate(0.45);
+}
+
+tr.is-pending:hover {
+  opacity: 0.75;
+  filter: saturate(0.7);
 }
 
 /* Al que le falta categoría se lo ve apagado: no es un gasto más de la lista, es uno que
@@ -1439,13 +1385,16 @@ tr.grupo-primero:first-child td {
 }
 
 .mov-table .day-input {
-  width: 52px;
+  /* 100% y no un px fijo: así siempre coincide con el ancho real de la columna, sea
+     cual sea — un número fijo se sale de la celda apenas la columna es más angosta. */
+  width: 100%;
+  min-width: 0;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: right;
-  padding: 7px 10px;
+  padding: 7px 8px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -1459,7 +1408,11 @@ tr.grupo-primero:first-child td {
 
 .mov-table .desc-input {
   width: 100%;
-  min-width: 200px;
+  /* Antes tenía min-width:200px, más ancho que la propia columna en varias pantallas:
+     el input se salía de su celda y el texto quedaba superpuesto con la de al lado.
+     min-width:0 deja que se achique a lo que la columna le da, y recorta con puntos
+     suspensivos (ver la regla de .desc-input en la sección de tablas). */
+  min-width: 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -1477,32 +1430,47 @@ tr.grupo-primero:first-child td {
   font-size: 13.5px;
   padding: 5px 6px;
   border-radius: 6px;
+  /* Sin esto, un <select> se dimensiona solo por su opción más larga ("Supermercado y
+     almacén"...) y se sale de su columna igual que le pasaba al input de al lado. */
+  width: 100%;
+  min-width: 0;
   max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .row-select:hover {
   border-color: var(--line-strong);
 }
 
-/* Anchos de la tabla de movimientos: el detalle se queda con lo que sobra. */
+/* Anchos de la tabla de movimientos.
+   Con table-layout:fixed, toda columna sin ancho explícito se reparte el espacio sobrante
+   según el contenido de la primera fila — y si hay más de una así (antes: Subcategoría y
+   la de los botones), el resultado es impredecible y termina superponiendo texto. Por eso
+   acá se fija el ancho de las seis, y sólo Descripción queda libre para estirarse con el
+   espacio que sobra en pantallas anchas: es la única que de verdad se beneficia. */
 .mov-table th:nth-child(1) {
-  width: 62px;
+  width: 48px;
 }
 
 .mov-table th:nth-child(2) {
-  width: 210px;
+  width: 160px;
 }
 
-.mov-table th:nth-child(4) {
-  width: 130px;
+.mov-table th:nth-child(3) {
+  width: 150px;
 }
 
 .mov-table th:nth-child(5) {
-  width: 58px;
+  width: 100px;
 }
 
 .mov-table th:nth-child(6) {
-  width: 74px;
+  width: 52px;
+}
+
+.mov-table th:nth-child(7) {
+  width: 40px;
 }
 
 /* ---------- descripción (helptext) ---------- */
@@ -1530,21 +1498,6 @@ tr.grupo-primero:first-child td {
 }
 
 /* ---------- formulario ---------- */
-
-.form-mas {
-  width: 100%;
-  justify-content: center;
-  margin-bottom: 12px;
-}
-
-.form-mas.is-open {
-  margin-bottom: 8px;
-}
-
-.form-extras {
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
-}
 
 .form-dialog {
   border: 1px solid var(--line-strong);
@@ -1599,56 +1552,6 @@ tr.grupo-primero:first-child td {
   background: var(--pos);
 }
 
-.moneda-toggle {
-  display: flex;
-  gap: 3px;
-  padding: 3px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  margin-bottom: 14px;
-}
-
-.moneda-btn {
-  flex: 1;
-  border: 0;
-  background: transparent;
-  color: var(--ink-soft);
-  font: inherit;
-  font-size: 13.5px;
-  padding: 6px;
-  border-radius: 8px;
-  cursor: pointer;
-}
-
-.moneda-btn.is-active {
-  background: var(--panel);
-  color: var(--ink);
-  font-weight: 600;
-  box-shadow: var(--shadow);
-}
-
-.cuotas-field input {
-  width: 72px;
-  font: inherit;
-  font-size: 15px;
-  color: var(--ink);
-  background: var(--bg);
-  border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  padding: 7px 9px;
-}
-
-.cuotas-field input:disabled {
-  opacity: 0.45;
-}
-
-#f-serie-info:not(:empty) {
-  display: block;
-  margin: -6px 0 12px;
-  color: var(--accent);
-}
-
 .field {
   display: block;
   margin-bottom: 13px;
@@ -1700,6 +1603,54 @@ tr.grupo-primero:first-child td {
   flex-wrap: wrap;
 }
 
+/* Gasto/Ingreso y Pagado, una sola línea: lo primero que se decide al cargar. */
+.campo-kind-pagado {
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.campo-kind-pagado .kind-toggle {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* Monto y Fecha, lado a lado: el monto se lleva el espacio, la fecha lo justo. */
+.campo-monto-fecha {
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.campo-monto {
+  flex: 1;
+  min-width: 0;
+}
+
+.campo-fecha {
+  flex: none;
+  width: 152px;
+}
+
+/* El monto y la moneda son un solo campo visual: el importe con su unidad al lado,
+   como en cualquier billetera. */
+.monto-moneda {
+  display: flex;
+  gap: 6px;
+}
+
+.monto-moneda #f-amount {
+  flex: 1;
+  min-width: 0;
+}
+
+.campo-moneda {
+  flex: none;
+  width: 88px;
+  padding-left: 8px;
+  padding-right: 6px;
+  font-size: 13.5px;
+}
+
 .check {
   display: flex;
   align-items: center;
@@ -1716,16 +1667,6 @@ tr.grupo-primero:first-child td {
 
 .check > span {
   margin: 0;
-}
-
-.date-field {
-  margin-left: auto;
-}
-
-.date-field .field-input {
-  width: auto;
-  padding: 6px 9px;
-  font-size: 14px;
 }
 
 .form-actions {
@@ -2258,14 +2199,6 @@ tr.grupo-primero:first-child td {
     padding: 12px 10px 96px;
   }
 
-  .kpis {
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-
-  .kpi-value {
-    font-size: 18px;
-  }
 
   /* En pantalla chica una grilla de 12 meses no entra: en vez de aplastar las
      columnas, la tabla mantiene un ancho mínimo y se desplaza con el dedo. */

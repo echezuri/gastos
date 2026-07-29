@@ -393,9 +393,9 @@ const TORTA_COLORES = [
 function chartTorta({ items, width = 460, title, note, format = shortMoney, selected = null, onSelect = null }) {
   const partes = items.filter((i) => i.value > 0);
   const total = partes.reduce((t, i) => t + i.value, 0);
-  const alto = 190;
-  const r = 74;
-  const grosor = 30;
+  const alto = 224;
+  const r = 90;
+  const grosor = 36;
   const cx = alto / 2 + 6;
   const cy = alto / 2;
 

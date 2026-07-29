@@ -590,7 +590,6 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
 
   return el('section', { class: 'panel' }, [
     el('div', { class: 'panel-head' }, [el('h2', { text: title }), el('span', { class: 'hint', text: hint })]),
-    sectionInsights(key, title),
     el('div', { class: 'scroll-x' }, [
       el('table', {}, [
         el('thead', {}, [
@@ -698,61 +697,35 @@ function renderGraficosDeSeccion(key, title) {
   const porMes = sectionTotals(key);
   const color = key === 'ingresos' ? CHART_COLORS.income : key === 'ahorro' ? CHART_COLORS.neutral : CHART_COLORS.expense;
 
+  // El anual entra en la misma grilla que el mes: sin drill-down quedan uno al lado del
+  // otro, mitad y mitad. Con una subcategoría abierta son tres, y el anual pasa a su
+  // propia fila completa (ver la regla ":last-child:nth-child(odd)" del CSS).
+  graficos.push(
+    chartColumns({
+      labels: MONTHS,
+      series: [{ name: title, color, values: porMes }],
+      width: 940,
+      height: 210,
+      selected: mes,
+      onSelect: (i) => {
+        state.mesGrafico = i;
+        state.desglose = null;
+        renderYear();
+      },
+      title: `Todo el año · ${state.year}`,
+      note: 'clic en una barra para ver ese mes arriba',
+    })
+  );
+
   return el('div', { class: 'graficos-seccion' }, [
     el('div', { class: 'panel-head' }, [
       el('h2', { text: `En qué se fue` }),
       el('span', { class: 'hint', text: 'elegí el mes' }),
     ]),
     selector,
-    graficos.length
-      ? el('div', { class: 'chart-grid' }, graficos)
-      : el('p', { class: 'empty', text: `No hay ${title.toLowerCase()} cargados en ${MONTHS[mes]}.` }),
-    el('div', { class: 'chart-grid' }, [
-      chartColumns({
-        labels: MONTHS,
-        series: [{ name: title, color, values: porMes }],
-        width: 940,
-        height: 210,
-        selected: mes,
-        onSelect: (i) => {
-          state.mesGrafico = i;
-          state.desglose = null;
-          renderYear();
-        },
-        title: `Todo el año · ${state.year}`,
-        note: 'clic en una barra para ver ese mes arriba',
-      }),
-    ]),
+    !delMes.length ? el('p', { class: 'empty', text: `No hay ${title.toLowerCase()} cargados en ${MONTHS[mes]}.` }) : null,
+    el('div', { class: 'chart-grid' }, graficos),
   ]);
-}
-
-/** Los números de una sección. */
-function sectionInsights(key, title) {
-  const cats = categoriesOf(key);
-  const totals = sectionTotals(key);
-  const yearTotal = sum(totals);
-  const withData = totals.filter((t) => t !== 0);
-  const peak = totals.indexOf(Math.max(...totals));
-
-  const ranking = cats
-    .map((c) => ({ label: c.name, value: sum(c.months) }))
-    .filter((r) => r.value !== 0)
-    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
-
-  const stats = statRow([
-    { label: 'Total del año', value: money(yearTotal) },
-    {
-      label: 'Promedio mensual',
-      value: money(withData.length ? Math.round(yearTotal / withData.length) : 0),
-      sub: `${withData.length} mes(es) con datos`,
-    },
-    yearTotal ? { label: 'Mes más alto', value: MONTHS[peak], sub: money(totals[peak]) } : null,
-    ranking.length ? { label: 'Categoría más alta', value: ranking[0].label, sub: money(ranking[0].value) } : null,
-  ]);
-
-  // Los gráficos viven todos en Resumen: acá quedan los números, que son los que se miran
-  // sin levantar la vista de la tabla.
-  return stats;
 }
 
 function categoryNameInput(section, name) {
@@ -889,7 +862,16 @@ async function removeCategory(section, name) {
 
 function renderPending() {
   const pending = state.data.pending;
-  if (!pending.length) return null;
+
+  if (!pending.length) {
+    return el('section', { class: 'panel panel-pending' }, [
+      el('div', { class: 'panel-head' }, [
+        el('h2', { text: 'Pendientes' }),
+        el('span', { class: 'hint', text: 'nada esperando: todo pagado y encasillado' }),
+      ]),
+      el('p', { class: 'empty', text: '✓ No tenés gastos sin pagar ni categorías por resolver.' }),
+    ]);
+  }
 
   const rows = pending.map((mov) =>
     el('tr', { class: mov.orphan ? 'fila-huerfana' : '', title: mov.orphan ? `La categoría "${mov.category}" ya no existe. Editalo en Movimientos para encasillarlo.` : mov.description || '' }, [
@@ -944,7 +926,7 @@ function renderPending() {
 
   return el('section', { class: 'panel panel-pending' }, [
     el('div', { class: 'panel-head' }, [
-      el('h2', { text: 'Sin pagar' }),
+      el('h2', { text: 'Pendientes' }),
       el('span', {
         class: 'hint',
         text:
@@ -1752,7 +1734,6 @@ function renderMovements() {
     el('div', { class: 'panel-head' }, head),
     el('div', { class: 'months' }, chips),
     baseRow,
-    movementInsights(list, month),
     list.length
       ? el('div', { class: 'scroll-x' }, [
           el('table', { class: 'mov-table' }, [
@@ -1784,25 +1765,6 @@ function renderMovements() {
           ]),
         ])
       : el('p', { class: 'empty', text: filter ? 'Esta celda no tiene movimientos en el mes.' : 'Todavía no cargaste movimientos en este mes.' }),
-  ]);
-}
-
-/** Los números del mes que estás mirando en Movimientos. */
-function movementInsights(list, month) {
-  if (!list.length) return null;
-  const paid = list.filter((m) => m.paid);
-  const total = sum(paid.map((m) => m.amount));
-  const pending = list.filter((m) => !m.paid);
-  const biggest = [...list].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount))[0];
-
-  // Los gráficos viven todos en Resumen: acá quedan los números del mes que estás mirando.
-  return statRow([
-    { label: `Total ${MONTHS[month - 1]}`, value: money(total), sub: `${paid.length} movimiento(s)` },
-    { label: 'Promedio', value: money(paid.length ? Math.round(total / paid.length) : 0) },
-    biggest ? { label: 'El más grande', value: money(biggest.amount), sub: biggest.subcategory || biggest.category } : null,
-    pending.length
-      ? { label: 'Sin pagar', value: money(sum(pending.map((m) => m.amount))), sub: `${pending.length} movimiento(s)`, tone: 'pending' }
-      : null,
   ]);
 }
 
@@ -1857,61 +1819,33 @@ function subcategoriesFor(section, category) {
 
 const form = {
   kind: 'gasto',
-  moneda: 'ARS',
   dialog: null,
 };
 
-/** Abre o cierra la parte de abajo del formulario (subcategoría, cuotas, dólares…). */
-function mostrarMasOpciones(abrir) {
-  const extras = form.dialog.querySelector('#form-extras');
-  const boton = form.dialog.querySelector('#form-mas');
-  extras.hidden = !abrir;
-  boton.textContent = abrir ? 'Menos opciones' : 'Más opciones';
-  boton.classList.toggle('is-open', abrir);
-  if (abrir) form.dialog.querySelector('#f-sub').focus();
-}
-
+/**
+ * El formulario de carga, reducido a lo que se usa siempre.
+ *
+ * Cuotas y suscripción salieron: eso se va a manejar desde Tarjetas. Sin esas dos cosas,
+ * todo lo que queda (moneda, subcategoría, descripción) entra a la vista de una — no hace
+ * falta un "más opciones" que abrir.
+ */
 function buildForm() {
   const amount = el('input', { id: 'f-amount', class: 'field-input', type: 'text', inputmode: 'decimal', placeholder: '0', autocomplete: 'off' });
+  const moneda = el('select', { id: 'f-moneda', class: 'field-input campo-moneda' }, [
+    el('option', { value: 'ARS', text: '$ ARS' }),
+    el('option', { value: 'USD', text: 'US$ USD' }),
+  ]);
+  const cotizacion = el('input', { id: 'f-rate', class: 'field-input', type: 'text', inputmode: 'decimal', placeholder: 'cotización' });
+  const date = el('input', { id: 'f-date', class: 'field-input', type: 'date' });
   const category = el('select', { id: 'f-category', class: 'field-input' });
   const subcategory = el('input', { id: 'f-sub', class: 'field-input', type: 'text', list: 'f-sub-list', placeholder: 'opcional — escribí una nueva para crearla', autocomplete: 'off' });
   const subList = el('datalist', { id: 'f-sub-list' });
-  const description = el('input', { id: 'f-desc', class: 'field-input', type: 'text', placeholder: 'opcional — se ve al pasar el mouse por encima', autocomplete: 'off' });
+  const description = el('input', { id: 'f-desc', class: 'field-input', type: 'text', placeholder: 'opcional', autocomplete: 'off' });
   const paid = el('input', { id: 'f-paid', type: 'checkbox', checked: true });
 
-  // --- moneda, cuotas y suscripción ---
-  const monedaBotones = ['ARS', 'USD'].map((moneda) =>
-    el('button', {
-      type: 'button',
-      class: 'moneda-btn' + (moneda === 'ARS' ? ' is-active' : ''),
-      dataset: { moneda },
-      text: moneda === 'ARS' ? '$ pesos' : 'US$ dólares',
-      onclick: () => setFormMoneda(moneda),
-    })
-  );
-  const cotizacion = el('input', { id: 'f-rate', class: 'field-input', type: 'text', inputmode: 'decimal', placeholder: 'cotización' });
-  const cuotas = el('input', { id: 'f-cuotas', class: 'field-input', type: 'number', min: '1', max: '60', value: '1' });
-  const suscripcion = el('input', { id: 'f-susc', type: 'checkbox' });
-  const resumenSerie = el('small', { id: 'f-serie-info', class: 'field-hint' });
-
-  const actualizarSerie = () => {
-    const n = Number(cuotas.value) || 1;
-    const esSusc = suscripcion.checked;
-    cuotas.disabled = esSusc;
-    const monto = parseNumber(form.dialog.querySelector('#f-amount').value);
-    if (esSusc) {
-      resumenSerie.textContent = 'Se repite todos los meses hasta diciembre.';
-    } else if (n > 1) {
-      const total = monto ? ` · total ${money(monto * n)}` : '';
-      resumenSerie.textContent = `${n} meses seguidos con ese importe${total}.`;
-    } else {
-      resumenSerie.textContent = '';
-    }
-  };
-  cuotas.addEventListener('input', actualizarSerie);
-  suscripcion.addEventListener('change', actualizarSerie);
-  amount.addEventListener('input', actualizarSerie);
-  const date = el('input', { id: 'f-date', class: 'field-input', type: 'date' });
+  moneda.addEventListener('change', () => setFormMoneda(moneda.value));
+  cotizacion.addEventListener('input', actualizarEquivalente);
+  amount.addEventListener('input', actualizarEquivalente);
 
   const kindButtons = ['gasto', 'ingreso'].map((kind) =>
     el('button', {
@@ -1925,46 +1859,30 @@ function buildForm() {
 
   category.addEventListener('change', refreshSubcategoryList);
 
-  // Lo que se usa en casi todas las cargas queda a la vista; el resto se abre solo si lo
-  // pedís. Casi siempre alcanza con monto, categoría y fecha.
-  const extras = el('div', { class: 'form-extras', id: 'form-extras', hidden: true }, [
-    el('div', { class: 'moneda-toggle' }, monedaBotones),
+  const formEl = el('form', { method: 'dialog', onsubmit: (e) => submitForm(e, false) }, [
+    el('div', { class: 'field-row campo-kind-pagado' }, [
+      el('div', { class: 'kind-toggle' }, kindButtons),
+      el('label', { class: 'check' }, [paid, el('span', { text: 'Pagado' })]),
+    ]),
+    el('div', { class: 'field-row campo-monto-fecha' }, [
+      el('label', { class: 'field campo-monto' }, [
+        el('span', { text: 'Monto' }),
+        el('div', { class: 'monto-moneda' }, [amount, moneda]),
+      ]),
+      el('label', { class: 'field campo-fecha' }, [el('span', { text: 'Fecha' }), date]),
+    ]),
     el('label', { class: 'field', id: 'campo-cotizacion', hidden: true }, [
       el('span', { text: 'Cotización del dólar' }),
       cotizacion,
       el('small', { class: 'field-hint', id: 'f-rate-info' }),
     ]),
-    el('label', { class: 'field' }, [el('span', { text: 'Subcategoría' }), subcategory, subList]),
-    el('label', { class: 'field' }, [el('span', { text: 'Descripción' }), description]),
-    el('div', { class: 'field field-row', id: 'campo-serie' }, [
-      el('label', { class: 'check cuotas-field' }, [el('span', { text: 'Cuotas' }), cuotas]),
-      el('label', { class: 'check' }, [suscripcion, el('span', { text: 'Suscripción' })]),
-    ]),
-    resumenSerie,
-  ]);
-
-  const verMas = el('button', {
-    type: 'button',
-    class: 'btn btn-ghost form-mas',
-    id: 'form-mas',
-    text: 'Más opciones',
-    onclick: () => mostrarMasOpciones(extras.hidden),
-  });
-
-  const formEl = el('form', { method: 'dialog', onsubmit: (e) => submitForm(e, false) }, [
-    el('div', { class: 'kind-toggle' }, kindButtons),
-    el('label', { class: 'field' }, [el('span', { text: 'Monto' }), amount]),
     el('label', { class: 'field' }, [
       el('span', { text: 'Categoría' }),
       category,
       el('small', { class: 'field-hint', text: 'las marcadas con · son de otros años; se agregan a este al guardar' }),
     ]),
-    el('div', { class: 'field field-row' }, [
-      el('label', { class: 'check' }, [paid, el('span', { text: 'Pagado' })]),
-      el('label', { class: 'check date-field' }, [el('span', { text: 'Fecha' }), date]),
-    ]),
-    verMas,
-    extras,
+    el('label', { class: 'field' }, [el('span', { text: 'Subcategoría' }), subcategory, subList]),
+    el('label', { class: 'field' }, [el('span', { text: 'Descripción' }), description]),
     el('footer', { class: 'form-actions' }, [
       el('button', { type: 'button', class: 'btn btn-ghost', text: 'Cancelar', onclick: () => form.dialog.close() }),
       el('span', { class: 'spacer' }),
@@ -1979,16 +1897,10 @@ function buildForm() {
   ]);
   document.body.append(dialog);
   form.dialog = dialog;
-  cotizacion.addEventListener('input', actualizarEquivalente);
-  amount.addEventListener('input', actualizarEquivalente);
   return dialog;
 }
 
 function setFormMoneda(moneda) {
-  form.moneda = moneda;
-  for (const btn of form.dialog.querySelectorAll('.moneda-btn')) {
-    btn.classList.toggle('is-active', btn.dataset.moneda === moneda);
-  }
   const campo = form.dialog.querySelector('#campo-cotizacion');
   campo.hidden = moneda !== 'USD';
   if (moneda === 'USD') {
@@ -2040,12 +1952,9 @@ function openForm(kind = 'gasto') {
   dialog.querySelector('#f-sub').value = '';
   dialog.querySelector('#f-desc').value = '';
   dialog.querySelector('#f-paid').checked = true;
-  dialog.querySelector('#f-cuotas').value = '1';
-  dialog.querySelector('#f-cuotas').disabled = false;
-  dialog.querySelector('#f-susc').checked = false;
-  dialog.querySelector('#f-serie-info').textContent = '';
+  dialog.querySelector('#f-moneda').value = 'ARS';
+  dialog.querySelector('#f-rate').value = '';
   setFormMoneda('ARS');
-  mostrarMasOpciones(false); // cada carga arranca simple
   dialog.showModal();
   dialog.querySelector('#f-amount').focus();
 }
@@ -2068,16 +1977,13 @@ async function submitForm(event, keepOpen) {
   const dateValue = dialog.querySelector('#f-date').value;
   const [y, m, d] = dateValue ? dateValue.split('-').map(Number) : [state.year, state.month, null];
 
-  const enDolares = form.moneda === 'USD';
+  const enDolares = dialog.querySelector('#f-moneda').value === 'USD';
   const cotizacion = parseNumber(dialog.querySelector('#f-rate').value);
   if (enDolares && !cotizacion) {
     toast('Poné a cuánto tomaste el dólar', true);
     dialog.querySelector('#f-rate').focus();
     return;
   }
-
-  const cuotas = Number(dialog.querySelector('#f-cuotas').value) || 1;
-  const suscripcion = dialog.querySelector('#f-susc').checked;
 
   const movimiento = {
     year: y,
@@ -2093,8 +1999,6 @@ async function submitForm(event, keepOpen) {
     rate: enDolares ? cotizacion : null,
     amount,
     paid: dialog.querySelector('#f-paid').checked,
-    cuotas,
-    suscripcion,
   };
 
   // Sin conexión no se pierde: queda en la cola del teléfono y sube después.
@@ -2125,13 +2029,8 @@ async function submitForm(event, keepOpen) {
     await apiMutar('POST', '/api/movements', movimiento);
     almacen.escribir(`ultima-categoria-${form.kind}`, categoryValue);
     if (enDolares) almacen.escribir('ultima-cotizacion', String(cotizacion));
-    const cuantos = suscripcion ? 13 - m : cuotas;
     const importe = enDolares ? `US$${nf.format(amount)}` : money(amount);
-    toast(
-      cuantos > 1
-        ? `${importe} × ${cuantos} meses guardado`
-        : `${form.kind === 'gasto' ? 'Gasto' : 'Ingreso'} de ${importe} guardado`
-    );
+    toast(`${form.kind === 'gasto' ? 'Gasto' : 'Ingreso'} de ${importe} guardado`);
 
     document.getElementById('year-select').value = String(state.year);
 
@@ -2405,62 +2304,19 @@ function mostrarLogin(mensaje) {
 
 // ---------------------------------------------------------------- render año
 
-/** Tarjetas de arriba: el año de un vistazo, sin tener que bajar a las tablas. */
-function renderKpis() {
-  const totals = Object.fromEntries(SECTIONS.map((s) => [s.key, sectionTotals(s.key)]));
-  const gasto = MONTHS.map((_, m) => sum(SECCIONES_DE_GASTO.map((key) => totals[key][m])));
-  const resto = MONTHS.map((_, m) => totals.ingresos[m] - gasto[m]);
-  const m = state.month - 1;
-  const pending = state.data.pending;
-
-  const tile = (label, values, cls = '') =>
-    el('div', { class: `kpi ${cls}`.trim() }, [
-      el('span', { class: 'kpi-label', text: label }),
-      el('strong', { class: 'kpi-value', text: money(sum(values)) }),
-      el('span', { class: 'kpi-sub', text: `${MONTHS[m]}: ${money(values[m])}` }),
-    ]);
-
-  const tiles = [
-    tile('Ingresos', totals.ingresos),
-    tile('Gasto', gasto),
-    tile('Resto', resto, sum(resto) < 0 ? 'is-neg' : 'is-pos'),
-  ];
-
-  if (pending.length) {
-    tiles.push(
-      el(
-        'button',
-        {
-          class: 'kpi kpi-button is-pending',
-          title: 'Ver lo que está sin pagar',
-          onclick: () => setTab('pendientes', 'anio'),
-        },
-        [
-          el('span', { class: 'kpi-label', text: 'Sin pagar' }),
-          el('strong', { class: 'kpi-value', text: money(sum(pending.map((p) => p.amount))) }),
-          el('span', { class: 'kpi-sub', text: `${pending.length} movimiento(s)` }),
-        ]
-      )
-    );
-  }
-
-  return el('div', { class: 'kpis' }, tiles);
-}
-
 /** Solapas de cada vista. Se arman en el momento porque algunas dependen de los datos. */
 const TABS = {
   anio: () => {
     if (!state.data) return [];
-    const tabs = [
+    return [
       { key: 'resumen', label: 'Resumen' },
       ...SECTIONS.map((s) => ({ key: s.key, label: s.title })),
       { key: 'movimientos', label: 'Movimientos' },
+      // Siempre presente, aunque no haya nada pendiente: es una solapa fija, no un aviso
+      // que aparece y desaparece.
+      { key: 'pendientes', label: 'Pendientes', badge: state.data.pending.length || null },
+      { key: 'revision', label: 'Revisión' },
     ];
-    if (state.data.pending.length) {
-      tabs.push({ key: 'pendientes', label: 'Sin pagar', badge: state.data.pending.length });
-    }
-    tabs.push({ key: 'revision', label: 'Revisión' });
-    return tabs;
   },
   auto: () => [
     { key: 'datos', label: 'Vehículo' },
@@ -2586,7 +2442,7 @@ function activePanel() {
   const tab = state.tabs.anio;
   if (tab === 'resumen') return renderSummary();
   if (tab === 'movimientos') return renderMovements();
-  if (tab === 'pendientes') return renderPending() || renderSummary();
+  if (tab === 'pendientes') return renderPending();
   if (tab === 'revision') return renderRevision();
   const section = SECTIONS.find((s) => s.key === tab);
   return section ? renderSection(section) : renderSummary();
@@ -2600,9 +2456,8 @@ function renderYear() {
       ? `${focused.dataset.section}|${focused.dataset.category}|${focused.dataset.month}`
       : null;
 
-  if (state.tabs.anio === 'pendientes' && !state.data.pending.length) state.tabs.anio = 'resumen';
   renderSubtabs();
-  app.replaceChildren(renderKpis(), activePanel());
+  app.replaceChildren(activePanel());
 
   if (focusKey) {
     const [section, category, month] = focusKey.split('|');
