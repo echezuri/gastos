@@ -859,6 +859,134 @@ async function borrarSubcategorias(section, category, name) {
   }
 }
 
+/** Un campo que renombra al salir, y vuelve atrás si el nombre no se pudo aplicar. */
+function campoRenombrar(valor, alGuardar, ancho = '100%') {
+  const input = el('input', { class: 'label-input', type: 'text', value: valor, style: `width:${ancho}` });
+  input.addEventListener('blur', async () => {
+    const nuevo = input.value.trim();
+    if (!nuevo || nuevo === valor) {
+      input.value = valor;
+      return;
+    }
+    try {
+      await alGuardar(nuevo);
+      toast('Renombrado');
+    } catch (err) {
+      input.value = valor;
+      toast(err.message, true);
+    }
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') input.blur();
+  });
+  return input;
+}
+
+/** Mete una categoría dentro de otra: los gastos se mudan y la vieja desaparece. */
+async function mudarCategoria(cat, catalogo) {
+  const destinos = catalogo.filter((c) => !(c.section === cat.section && c.name === cat.name));
+  const select = el(
+    'select',
+    { class: 'field-input' },
+    destinos.map((c) => el('option', { value: `${c.section}|${c.name}`, text: `${SECTION_TITLE[c.section] || c.section} · ${c.name}` }))
+  );
+  const elegido = await dialogo({
+    titulo: `Eliminar "${cat.name}"`,
+    hint: `Sus ${cat.celdas + cat.movs} registro(s) se mudan a la categoría que elijas y después desaparece. Los totales de cada mes no cambian.`,
+    contenido: [el('label', { class: 'field' }, [el('span', { text: 'Mover todo a' }), select])],
+    aceptar: 'Mover y eliminar',
+    leer: () => select.value,
+  });
+  if (!elegido) return;
+  const [seccion, nombre] = elegido.split('|');
+  try {
+    if (seccion !== cat.section) {
+      await api('POST', '/api/category/move', { section: cat.section, name: cat.name, toSection: seccion });
+    }
+    await api('POST', '/api/category/merge', { section: seccion, from: cat.name, to: nombre });
+    await refrescarPantalla();
+    toast(`Quedó "${nombre}"`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/**
+ * El catálogo entero: toda categoría con sus subcategorías y cuánto se usa cada una.
+ *
+ * Es la pantalla para ordenar los nombres. Renombrar se escribe encima; eliminar siempre
+ * pregunta a dónde se mudan los gastos, así no hay forma de perder plata sin querer.
+ */
+function renderCatalogo(catalogo) {
+  if (!catalogo || !catalogo.length) return null;
+
+  const filas = [];
+  for (const cat of catalogo) {
+    const usos = cat.celdas + cat.movs;
+    filas.push(
+      el('tr', { class: 'grupo-primero' }, [
+        el('td', { class: 'col-label' }, [el('span', { class: 'plain-label', text: SECTION_TITLE[cat.section] || cat.section })]),
+        el('td', { style: 'text-align:left' }, [
+          campoRenombrar(cat.name, (nuevo) => api('POST', '/api/category/merge', { section: cat.section, from: cat.name, to: nuevo })),
+        ]),
+        el('td', { class: 'num', text: `${usos} uso(s)` }),
+        amountCell(cat.total),
+        el('td', { class: 'num actions-cell' }, [
+          el('button', { class: 'icon-btn', title: 'Mover a otra sección', text: '⇄', onclick: () => moveCategoryToSection(cat.section, cat.name) }),
+          usos
+            ? el('button', { class: 'btn btn-small', text: 'Eliminar…', title: 'Mudar sus gastos a otra categoría y eliminarla', onclick: () => mudarCategoria(cat, catalogo) })
+            : el('button', {
+                class: 'icon-btn danger',
+                text: '✕',
+                title: 'Eliminar (está vacía)',
+                onclick: async () => {
+                  for (const anio of cat.years) await api('DELETE', '/api/category', { year: anio, section: cat.section, name: cat.name });
+                  await refrescarPantalla();
+                  toast('Eliminada');
+                },
+              }),
+        ]),
+      ])
+    );
+
+    for (const sub of cat.subs) {
+      filas.push(
+        el('tr', { class: 'fila-sub' }, [
+          el('td', { class: 'col-label' }),
+          el('td', { style: 'text-align:left' }, [
+            el('span', { class: 'sub-marca', text: '└' }),
+            sub.name === '—'
+              ? el('span', { class: 'plain-label', text: 'sin subcategoría' })
+              : campoRenombrar(sub.name, (nuevo) =>
+                  api('PATCH', '/api/subcategory', { section: cat.section, category: cat.name, from: sub.name, to: nuevo })
+                ),
+          ]),
+          el('td', { class: 'num', text: sub.movs ? `${sub.movs} mov.` : 'sin uso' }),
+          amountCell(sub.total),
+          el('td', { class: 'num actions-cell' }, [
+            sub.name === '—'
+              ? null
+              : el('button', {
+                  class: 'icon-btn danger',
+                  text: '✕',
+                  title: sub.movs ? 'Sale del catálogo; los movimientos conservan el texto' : 'Borrar del catálogo',
+                  onclick: () => borrarSubcategorias(cat.section, cat.name, sub.name),
+                }),
+          ]),
+        ])
+      );
+    }
+  }
+
+  return el('section', { class: 'panel' }, [
+    el('div', { class: 'panel-head' }, [
+      el('h2', { text: 'Categorías y subcategorías' }),
+      el('span', { class: 'hint', text: `${catalogo.length} categorías · escribí encima para renombrar` }),
+    ]),
+    el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, filas)])]),
+  ]);
+}
+
 function bloqueRevision(titulo, pista, filas, { tono = '' } = {}) {
   if (!filas.length) return null;
   return el('section', { class: `panel ${tono}`.trim() }, [
@@ -878,8 +1006,8 @@ function renderRevision() {
     ]);
   }
 
-  const { parecidas, huerfanas, sinUso, vacias, sinClasificar } = state.revision;
-  const bloques = [];
+  const { catalogo, parecidas, huerfanas, sinUso, vacias, sinClasificar } = state.revision;
+  const bloques = [renderCatalogo(catalogo)];
 
   // Un grupo por nombre repetido, con una fila por variante: así se ve de un vistazo cuál
   // conviene conservar (la que tiene más años y más movimientos).
@@ -1919,10 +2047,24 @@ const TABS = {
 };
 
 /** La barra superior es fija: el encabezado de las tablas se apoya justo abajo. */
+/**
+ * Cuánto mide la barra de arriba. La cabecera de las tablas se pega justo debajo.
+ *
+ * Se vigila en vez de medirse en momentos elegidos: la barra cambia de alto sola —el chip
+ * de estado y el engranaje aparecen después, y en el teléfono las solapas se van a otro
+ * renglón—. Con una medida vieja la cabecera se clava a media pantalla en vez de arriba.
+ */
+let vigilanteDeLaBarra = null;
+
 function measureTopbar() {
   const topbar = document.querySelector('.topbar');
-  if (topbar) {
-    document.documentElement.style.setProperty('--topbar-h', `${Math.round(topbar.offsetHeight)}px`);
+  if (!topbar) return;
+  const poner = () =>
+    document.documentElement.style.setProperty('--topbar-h', `${Math.round(topbar.getBoundingClientRect().height)}px`);
+  poner();
+  if (!vigilanteDeLaBarra && typeof ResizeObserver !== 'undefined') {
+    vigilanteDeLaBarra = new ResizeObserver(poner);
+    vigilanteDeLaBarra.observe(topbar);
   }
 }
 

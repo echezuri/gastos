@@ -1250,6 +1250,23 @@ tr.grupo-primero td {
   border-top: 1px solid var(--line);
 }
 
+/* Las subcategorías cuelgan de su categoría: sangradas y en un tono más bajo */
+tr.fila-sub td {
+  color: var(--ink-soft);
+}
+
+tr.fila-sub .label-input,
+tr.fila-sub .plain-label {
+  font-size: 13px;
+}
+
+.sub-marca {
+  display: inline-block;
+  width: 18px;
+  color: var(--line-strong);
+  user-select: none;
+}
+
 tr.grupo-primero:first-child td {
   border-top: 0;
 }
@@ -1804,24 +1821,34 @@ tr.grupo-primero:first-child td {
     /* por encima de la barra de gestos del teléfono */
     bottom: calc(18px + env(safe-area-inset-bottom, 0px));
     z-index: 60;
-    width: 58px;
-    height: 58px;
+    width: 64px;
+    height: 64px;
     padding: 0;
     border: 0;
     border-radius: 50%;
-    background: var(--accent);
+    /* Un degradado apenas más claro arriba: da volumen sin parecer un botón de plástico */
+    background: radial-gradient(120% 120% at 50% 0%, color-mix(in srgb, #fff 22%, var(--accent)), var(--accent));
     color: #fff;
-    font-size: 30px;
+    font-size: 33px;
     line-height: 1;
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+    /* Tres capas: el halo que lo despega del fondo, la sombra que lo apoya, y un filo
+       claro adentro del borde superior que simula la luz que le da de arriba. */
+    box-shadow:
+      0 2px 6px rgba(0, 0, 0, 0.18),
+      0 10px 26px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.35);
     cursor: pointer;
     /* que el pulgar no dispare el zoom por doble toque */
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
   }
 
+  /* Al apretarlo se hunde: se achica y pierde las sombras de afuera */
   .fab:active {
     transform: scale(0.94);
+    box-shadow:
+      0 1px 3px rgba(0, 0, 0, 0.2),
+      inset 0 2px 5px rgba(0, 0, 0, 0.25);
   }
 
   main {
@@ -1851,7 +1878,12 @@ tr.grupo-primero:first-child td {
     min-width: 0; /* el ancho lo dan las columnas, no un número inventado */
   }
 
+  /* La cabecera acompaña a la tabla en vez de quedarse pegada.
+     Acá .scroll-x desplaza a lo ancho, y eso convierte a la caja en contenedor de scroll
+     en los dos ejes: una cabecera pegajosa se ancla al borde de esa caja, que está a media
+     página, y queda flotando en el medio de la tabla. */
   .panel thead th {
+    position: static;
     width: 62px;
   }
 

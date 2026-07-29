@@ -419,5 +419,37 @@ comprobar(
 );
 comprobar('no quedan subcategorías de esa categoría', !san.llamar('GET', '/api/subcategories').subcategories.some((s) => s.category === 'Internet'));
 
+// ---------------------------------------------------------------- catálogo
+
+console.log('\nEl catálogo completo, para ordenar nombres\n');
+
+const ctxCat = cargarLogica(crearAlmacen({}));
+const cargar = (sub, monto, mes) =>
+  ctxCat.llamar('POST', '/api/movements', { year: 2026, month: mes, section: 'variables', category: 'Casa', subcategory: sub, amount: monto, paid: true, currency: 'ARS' });
+cargar('Luz', 1000, 3);
+cargar('luz', 500, 4); // el mismo concepto escrito distinto
+cargar('Pintura', 300, 5);
+
+const verCat = () => ctxCat.llamar('GET', '/api/revision').catalogo;
+comprobar('lista la categoría con sus subcategorías', verCat()[0].subs.length === 3, JSON.stringify(verCat()[0].subs.map((s) => s.name)));
+comprobar('y dice cuánto se usa cada una', verCat()[0].subs.every((s) => s.movs === 1));
+
+const totalAntesDeRenombrar = verCat()[0].total;
+comprobar('renombrar mueve los movimientos', ctxCat.llamar('PATCH', '/api/subcategory', { section: 'variables', category: 'Casa', from: 'luz', to: 'Luz' }).movimientos === 1);
+const trasRenombrar = verCat()[0];
+comprobar('las dos formas quedan juntas en una', trasRenombrar.subs.filter((s) => s.name === 'Luz').length === 1 && trasRenombrar.subs.length === 2);
+comprobar('con los movimientos de las dos', trasRenombrar.subs.find((s) => s.name === 'Luz').movs === 2);
+comprobar('y sin mover un peso', trasRenombrar.total === totalAntesDeRenombrar, `${trasRenombrar.total} vs ${totalAntesDeRenombrar}`);
+comprobar('un nombre vacío se rechaza', Boolean(ctxCat.llamar('PATCH', '/api/subcategory', { section: 'variables', category: 'Casa', from: 'Luz', to: '  ' }).error));
+
+// Eliminar una categoría con gastos es mudarlos a otra: los totales no se tocan
+ctxCat.llamar('POST', '/api/category', { year: 2026, section: 'variables', name: 'Hogar' });
+const totalDelAnio = () => ctxCat.llamar('GET', '/api/year/2026').sections.variables.categories.reduce((t, c) => t + c.months.reduce((a, b) => a + (b || 0), 0), 0);
+const antesDeMudar = totalDelAnio();
+ctxCat.llamar('POST', '/api/category/merge', { section: 'variables', from: 'Casa', to: 'Hogar' });
+comprobar('mudar los gastos y eliminar no cambia el total', totalDelAnio() === antesDeMudar, `${totalDelAnio()} vs ${antesDeMudar}`);
+comprobar('la categoría vieja ya no está', !verCat().some((c) => c.name === 'Casa'), verCat().map((c) => c.name).join(', '));
+comprobar('y las subcategorías se fueron con ella', verCat().find((c) => c.name === 'Hogar').subs.some((s) => s.name === 'Luz'));
+
 console.log(`\n${pruebas} comprobaciones, ${fallas} con problema.`);
 process.exit(fallas ? 1 : 0);

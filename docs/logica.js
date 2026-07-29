@@ -287,7 +287,39 @@ function revisarDatos() {
     sinClasificar[anio] = (sinClasificar[anio] || 0) + 1;
   });
 
+  // El catálogo entero, con cuánto se usa cada cosa: es lo que hace falta para decidir qué
+  // conservar, qué renombrar y qué fusionar sin adivinar.
+  const cuentaSub = {};
+  movimientos.forEach(function (m) {
+    const k = texto(m.seccion) + '|' + texto(m.categoria) + '|' + (texto(m.subcategoria) || '—');
+    if (!cuentaSub[k]) cuentaSub[k] = { movs: 0, total: 0 };
+    cuentaSub[k].movs++;
+    if (bool(m.pagado)) cuentaSub[k].total += Number(m.monto) || 0;
+  });
+
+  const catalogo = lista.slice().sort(function (a, b) {
+    return a.section.localeCompare(b.section) || a.name.localeCompare(b.name);
+  }).map(function (u) {
+    const subs = {};
+    leer('subcategorias')
+      .filter(function (s) { return texto(s.seccion) === u.section && texto(s.categoria) === u.name; })
+      .forEach(function (s) { subs[texto(s.nombre)] = { name: texto(s.nombre), movs: 0, total: 0, enCatalogo: true }; });
+    Object.keys(cuentaSub).forEach(function (k) {
+      const partes = k.split('|');
+      if (partes[0] !== u.section || partes[1] !== u.name) return;
+      const nombre = partes[2];
+      if (!subs[nombre]) subs[nombre] = { name: nombre, movs: 0, total: 0, enCatalogo: false };
+      subs[nombre].movs = cuentaSub[k].movs;
+      subs[nombre].total = cuentaSub[k].total;
+    });
+    const copia = {};
+    Object.keys(u).forEach(function (k) { copia[k] = u[k]; });
+    copia.subs = Object.keys(subs).sort().map(function (n) { return subs[n]; });
+    return copia;
+  });
+
   return {
+    catalogo: catalogo,
     parecidas: parecidas,
     vacias: vacias,
     huerfanas: huerfanas,
@@ -470,6 +502,36 @@ function fusionarCategoria(seccion, desde, hacia) {
   return { ok: true, celdas: sumar.length + renombrar.length, movimientos: movimientos.length };
 }
 
+/**
+ * Renombra una subcategoría, en el catálogo y en los movimientos que la usan.
+ *
+ * Si el nombre nuevo ya existe, las dos quedan juntas: es la forma de arreglar los casos
+ * en que lo mismo se escribió de dos maneras.
+ */
+function renombrarSubcategoria(seccion, categoria, desde, hacia) {
+  if (!hacia) throw new Error('Falta el nombre nuevo');
+  if (!desde || desde === hacia) return { ok: true, movimientos: 0 };
+
+  const movimientos = leer('movimientos').filter(function (m) {
+    return texto(m.seccion) === seccion && texto(m.categoria) === categoria && texto(m.subcategoria) === desde;
+  });
+  movimientos.forEach(function (m) { actualizar('movimientos', m.id, { subcategoria: hacia }); });
+
+  const yaEsta = leer('subcategorias').some(function (s) {
+    return texto(s.seccion) === seccion && texto(s.categoria) === categoria && texto(s.nombre) === hacia;
+  });
+  leer('subcategorias')
+    .filter(function (s) {
+      return texto(s.seccion) === seccion && texto(s.categoria) === categoria && texto(s.nombre) === desde;
+    })
+    .forEach(function (s) {
+      if (yaEsta) borrar('subcategorias', s.id);
+      else actualizar('subcategorias', s.id, { nombre: hacia });
+    });
+
+  return { ok: true, movimientos: movimientos.length };
+}
+
 /** Pasa una categoría entera de sección, en todos los años. */
 function moverCategoriaDeSeccion(seccion, nombre, aSeccion) {
   if (SECCIONES.indexOf(aSeccion) < 0) throw new Error('Sección inválida: ' + aSeccion);
@@ -635,6 +697,10 @@ function despachar(metodo, ruta, cuerpo) {
 
   if (camino === '/api/category/move' && metodo === 'POST') {
     return moverCategoriaDeSeccion(texto(cuerpo.section), texto(cuerpo.name), texto(cuerpo.toSection));
+  }
+
+  if (camino === '/api/subcategory' && metodo === 'PATCH') {
+    return renombrarSubcategoria(texto(cuerpo.section), texto(cuerpo.category), texto(cuerpo.from), texto(cuerpo.to).trim());
   }
 
   if (camino === '/api/subcategory' && metodo === 'DELETE') {
