@@ -451,5 +451,39 @@ comprobar('mudar los gastos y eliminar no cambia el total', totalDelAnio() === a
 comprobar('la categoría vieja ya no está', !verCat().some((c) => c.name === 'Casa'), verCat().map((c) => c.name).join(', '));
 comprobar('y las subcategorías se fueron con ella', verCat().find((c) => c.name === 'Hogar').subs.some((s) => s.name === 'Luz'));
 
+// ---------------------------------------------------------------- huérfanos
+
+// Borrar una categoría no borra lo que gastaste: el movimiento queda con el nombre viejo
+// y espera en Pendientes hasta que le elijas categoría. Mientras tanto no suma, igual que
+// los sin pagar, y esa baja en el total es justamente el aviso de que falta acomodarlo.
+console.log('\nBorrar una categoría deja los gastos esperando\n');
+
+const huer = cargarLogica(crearAlmacen({}));
+huer.llamar('POST', '/api/movements', { year: 2026, month: 3, section: 'variables', category: 'Vieja', subcategory: 'algo', amount: 1000, paid: true, currency: 'ARS' });
+huer.llamar('POST', '/api/movements', { year: 2026, month: 3, section: 'variables', category: 'Buena', amount: 500, paid: true, currency: 'ARS' });
+const marzo = () => huer.llamar('GET', '/api/year/2026').sections.variables.categories.reduce((s, c) => s + (c.months[2] || 0), 0);
+
+comprobar('antes suman las dos', marzo() === 1500, String(marzo()));
+const borrado = huer.llamar('DELETE', '/api/category', { section: 'variables', name: 'Vieja' });
+comprobar('el borrado avisa cuántos gastos quedan sueltos', borrado.movimientos === 1, JSON.stringify(borrado));
+
+const trasBorrar = huer.llamar('GET', '/api/year/2026');
+comprobar('la categoría sale de la grilla', !trasBorrar.sections.variables.categories.some((c) => c.name === 'Vieja'));
+comprobar('el gasto no se borró: espera en Pendientes', trasBorrar.pending.length === 1 && trasBorrar.pending[0].amount === 1000);
+comprobar('y viene marcado como huérfano', trasBorrar.pending[0].orphan === 1);
+comprobar('con su nombre viejo, que es la pista de dónde iba', trasBorrar.pending[0].category === 'Vieja');
+comprobar('mientras tanto no suma', marzo() === 500, String(marzo()));
+
+// Al reencasillarlo vuelve a contar, sin que haya que tocar ningún total a mano
+huer.llamar('PUT', `/api/movements/${trasBorrar.pending[0].id}`, { category: 'Buena' });
+comprobar('al encasillarlo vuelve a sumar', marzo() === 1500, String(marzo()));
+comprobar('y Pendientes queda limpio', huer.llamar('GET', '/api/year/2026').pending.length === 0);
+
+// Un monto suelto en la grilla no tiene con qué recuperarse: ahí se corta
+huer.llamar('PUT', '/api/cell', { year: 2026, section: 'variables', category: 'ConCeldas', month: 5, amount: 900 });
+const conCeldas = huer.llamar('DELETE', '/api/category', { section: 'variables', name: 'ConCeldas' });
+comprobar('no deja borrar una categoría con montos en la grilla', Boolean(conCeldas.error), JSON.stringify(conCeldas));
+comprobar('y explica qué hacer en su lugar', /Eliminar/.test(conCeldas.error || ''), conCeldas.error);
+
 console.log(`\n${pruebas} comprobaciones, ${fallas} con problema.`);
 process.exit(fallas ? 1 : 0);

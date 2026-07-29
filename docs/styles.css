@@ -1244,6 +1244,25 @@ tr.is-pending {
   opacity: 0.6;
 }
 
+/* Al que le falta categoría se lo ve apagado: no es un gasto más de la lista, es uno que
+   pide que lo acomodes. El nombre viejo queda tachado, que es la pista de dónde iba. */
+tr.fila-huerfana {
+  color: var(--ink-soft);
+  background: repeating-linear-gradient(
+    -45deg,
+    transparent,
+    transparent 7px,
+    color-mix(in srgb, var(--ink-soft) 6%, transparent) 7px,
+    color-mix(in srgb, var(--ink-soft) 6%, transparent) 14px
+  );
+}
+
+.es-huerfana {
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, var(--ink-soft) 60%, transparent);
+  color: var(--ink-soft);
+}
+
 /* En "Nombres repetidos" cada variante es una fila: la línea separa un grupo del
    siguiente, así se ve cuáles compiten entre sí. */
 tr.grupo-primero td {

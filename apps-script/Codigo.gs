@@ -122,10 +122,22 @@ function armarAnio(anio) {
       cat.base[Number(c.mes) - 1] = numero(c.monto);
     });
 
+  // Las categorías que existen de verdad. Un movimiento puede nombrar una que ya no está:
+  // pasa cuando la borrás para reordenar. Ese gasto no se pierde ni se cuenta a medias —
+  // sale de la grilla y espera en Pendientes hasta que lo encasilles.
+  const declaradas = {};
+  leer('categorias').forEach(function (c) { declaradas[texto(c.seccion) + '|' + texto(c.nombre)] = true; });
+
   const pendientes = [];
   leer('movimientos')
     .filter(function (m) { return Number(m.anio) === anio; })
     .forEach(function (m) {
+      if (!declaradas[texto(m.seccion) + '|' + texto(m.categoria)]) {
+        const suelto = movimientoApp(m);
+        suelto.orphan = 1; // la pantalla lo muestra en gris, con el nombre viejo
+        pendientes.push(suelto);
+        return;
+      }
       const cat = obtener(texto(m.seccion), texto(m.categoria));
       const i = Number(m.mes) - 1;
       cat.moves[i]++;
@@ -749,18 +761,34 @@ function despachar(metodo, ruta, cuerpo) {
         .forEach(function (s) { actualizar('subcategorias', s.id, { categoria: hacia }); });
       return { ok: true };
     }
+    /**
+     * Borra la categoría, no lo que gastaste.
+     *
+     * Los movimientos quedan con el nombre viejo y aparecen en Pendientes para que los
+     * encasilles; mientras tanto no suman, igual que los sin pagar.
+     *
+     * Las celdas son la excepción: un monto suelto en la grilla no tiene descripción ni
+     * subcategoría, así que huérfano no hay forma de recuperarlo. Si las hay, se corta y se
+     * pide usar la fusión, que las muda a otra categoría sin perder un peso.
+     */
     if (metodo === 'DELETE') {
       const nombre = texto(cuerpo.name);
-      borrarDonde('celdas', function (c) {
-        return Number(c.anio) === anio && texto(c.seccion) === seccion && texto(c.categoria) === nombre;
+      const conCeldas = leer('celdas').filter(function (c) {
+        return texto(c.seccion) === seccion && texto(c.categoria) === nombre;
       });
-      borrarDonde('movimientos', function (mv) {
-        return Number(mv.anio) === anio && texto(mv.seccion) === seccion && texto(mv.categoria) === nombre;
+      if (conCeldas.length) {
+        throw new Error(
+          '"' + nombre + '" tiene ' + conCeldas.length + ' monto(s) cargados a mano en la grilla. ' +
+          'Usá "Eliminar…" para mudarlos a otra categoría: sueltos no se podrían recuperar.'
+        );
+      }
+      const sueltos = borrarDonde('categorias', function (c) {
+        return texto(c.seccion) === seccion && texto(c.nombre) === nombre;
       });
-      borrarDonde('categorias', function (c) {
-        return Number(c.anio) === anio && texto(c.seccion) === seccion && texto(c.nombre) === nombre;
-      });
-      return { ok: true };
+      const movimientos = leer('movimientos').filter(function (mv) {
+        return texto(mv.seccion) === seccion && texto(mv.categoria) === nombre;
+      }).length;
+      return { ok: true, anios: sueltos, movimientos: movimientos };
     }
   }
 

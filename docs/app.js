@@ -766,24 +766,41 @@ function renderPending() {
   if (!pending.length) return null;
 
   const rows = pending.map((mov) =>
-    el('tr', { title: mov.description || '' }, [
+    el('tr', { class: mov.orphan ? 'fila-huerfana' : '', title: mov.orphan ? `La categoría "${mov.category}" ya no existe. Editalo en Movimientos para encasillarlo.` : mov.description || '' }, [
       el('td', { class: 'col-label' }, [
         el('span', { class: 'plain-label', text: `${MONTHS[mov.month - 1]}${mov.day ? ` ${mov.day}` : ''}` }),
       ]),
-      el('td', { style: 'text-align:left' }, [el('span', { class: 'plain-label', text: mov.category })]),
+      el('td', { style: 'text-align:left' }, [
+        // La categoría borrada se muestra igual: es la pista para saber dónde iba
+        el('span', { class: 'plain-label' + (mov.orphan ? ' es-huerfana' : ''), text: mov.category }),
+      ]),
       el('td', { style: 'text-align:left' }, [
         el('span', { class: 'plain-label' + (mov.description ? ' has-note' : ''), text: mov.subcategory || '—' }),
       ]),
       amountCell(mov.amount),
       el('td', { class: 'num' }, [
-        el('button', {
-          class: 'btn btn-small',
-          text: 'Marcar pagado',
-          onclick: async () => {
-            await apiMutar('PUT', `/api/movements/${mov.id}`, { paid: true });
-            toast('Pagado');
-          },
-        }),
+        // A un huérfano no le falta el pago, le falta la categoría: lo que ayuda es
+        // llevarte a donde se edita, no marcarlo pagado.
+        mov.orphan
+          ? el('button', {
+              class: 'btn btn-small',
+              text: 'Encasillar',
+              title: 'Ir a Movimientos para elegirle categoría',
+              onclick: async () => {
+                state.month = mov.month;
+                state.filter = null;
+                setTab('movimientos', 'anio');
+                await refreshMovements();
+              },
+            })
+          : el('button', {
+              class: 'btn btn-small',
+              text: 'Marcar pagado',
+              onclick: async () => {
+                await apiMutar('PUT', `/api/movements/${mov.id}`, { paid: true });
+                toast('Pagado');
+              },
+            }),
         el('button', {
           class: 'icon-btn danger',
           text: '✕',
@@ -799,7 +816,14 @@ function renderPending() {
   return el('section', { class: 'panel panel-pending' }, [
     el('div', { class: 'panel-head' }, [
       el('h2', { text: 'Sin pagar' }),
-      el('span', { class: 'hint', text: `${pending.length} movimiento(s) · ${money(sum(pending.map((p) => p.amount)))} · no suman a los totales` }),
+      el('span', {
+        class: 'hint',
+        text:
+          `${pending.length} movimiento(s) · ${money(sum(pending.map((p) => p.amount)))} · no suman a los totales` +
+          (pending.some((p) => p.orphan)
+            ? ` · ${pending.filter((p) => p.orphan).length} en gris esperan categoría`
+            : ''),
+      }),
     ]),
     el('div', { class: 'scroll-x' }, [el('table', {}, [el('tbody', {}, rows)])]),
   ]);
@@ -933,16 +957,21 @@ function renderCatalogo(catalogo) {
         amountCell(cat.total),
         el('td', { class: 'num actions-cell' }, [
           el('button', { class: 'icon-btn', title: 'Mover a otra sección', text: '⇄', onclick: () => moveCategoryToSection(cat.section, cat.name) }),
-          usos
-            ? el('button', { class: 'btn btn-small', text: 'Eliminar…', title: 'Mudar sus gastos a otra categoría y eliminarla', onclick: () => mudarCategoria(cat, catalogo) })
+          cat.celdas
+            ? el('button', { class: 'btn btn-small', text: 'Eliminar…', title: 'Tiene montos cargados en la grilla: hay que mudarlos', onclick: () => mudarCategoria(cat, catalogo) })
             : el('button', {
                 class: 'icon-btn danger',
                 text: '✕',
-                title: 'Eliminar (está vacía)',
+                title: cat.movs ? `Eliminar. Sus ${cat.movs} gasto(s) van a Pendientes esperando categoría` : 'Eliminar (está vacía)',
                 onclick: async () => {
-                  for (const anio of cat.years) await api('DELETE', '/api/category', { year: anio, section: cat.section, name: cat.name });
-                  await refrescarPantalla();
-                  toast('Eliminada');
+                  if (cat.movs && !confirm(`¿Eliminar "${cat.name}"?\n\nSus ${cat.movs} gasto(s) no se borran: quedan en Pendientes, en gris, hasta que les elijas categoría. Mientras tanto no suman.`)) return;
+                  try {
+                    await api('DELETE', '/api/category', { section: cat.section, name: cat.name });
+                    await refrescarPantalla();
+                    toast(cat.movs ? `${cat.movs} gasto(s) esperan en Pendientes` : 'Eliminada');
+                  } catch (err) {
+                    toast(err.message, true);
+                  }
                 },
               }),
         ]),
