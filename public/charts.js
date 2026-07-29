@@ -370,6 +370,106 @@ function chartBars({ items, width = 460, title, note, format = shortMoney, selec
   return chartFrame({ title, note, plot });
 }
 
+/**
+ * Paleta para repartos. El orden importa: los primeros son los más distinguibles entre sí,
+ * y las porciones vienen ordenadas de mayor a menor, así los pedazos grandes nunca comparten
+ * un color parecido. Igual el color nunca es el único dato: al lado va siempre la etiqueta
+ * con su importe y su porcentaje.
+ */
+const TORTA_COLORES = [
+  '#e34948', '#2a78d6', '#1baf7a', '#d08c1c', '#8a5cd6',
+  '#e0733a', '#3aa7b8', '#b8446f', '#6f8f2a', '#7a7f8c',
+];
+
+/**
+ * Torta (anillo) para ver de qué se compone un total.
+ *
+ * Anillo y no torta llena: el agujero deja lugar para el total, que es el número contra el
+ * que uno compara cada porción sin tener que buscarlo en otro lado.
+ *
+ * `items` = [{ label, value }]. Los valores negativos se ignoran: una porción no puede
+ * medir menos que nada, y mezclarlos daría porcentajes sin sentido.
+ */
+function chartTorta({ items, width = 460, title, note, format = shortMoney, selected = null, onSelect = null }) {
+  const partes = items.filter((i) => i.value > 0);
+  const total = partes.reduce((t, i) => t + i.value, 0);
+  const alto = 190;
+  const r = 74;
+  const grosor = 30;
+  const cx = alto / 2 + 6;
+  const cy = alto / 2;
+
+  const plot = svg('svg', { viewBox: `0 0 ${width} ${alto}`, class: 'chart', role: 'img', preserveAspectRatio: 'xMidYMid meet' });
+
+  if (!total) {
+    plot.append(svg('circle', { cx, cy, r: r - grosor / 2, fill: 'none', stroke: 'var(--line)', 'stroke-width': grosor }));
+  }
+
+  let desde = -Math.PI / 2; // arranca arriba, como un reloj
+  partes.forEach((item, i) => {
+    const angulo = (item.value / total) * Math.PI * 2;
+    const hasta = desde + angulo;
+    const color = TORTA_COLORES[i % TORTA_COLORES.length];
+    const grande = angulo > Math.PI ? 1 : 0;
+    const ri = r - grosor;
+    const x1 = cx + r * Math.cos(desde), y1 = cy + r * Math.sin(desde);
+    const x2 = cx + r * Math.cos(hasta), y2 = cy + r * Math.sin(hasta);
+    const x3 = cx + ri * Math.cos(hasta), y3 = cy + ri * Math.sin(hasta);
+    const x4 = cx + ri * Math.cos(desde), y4 = cy + ri * Math.sin(desde);
+
+    // Una sola porción no dibuja arco: sería un camino de largo cero
+    const d =
+      partes.length === 1
+        ? `M${cx - r} ${cy}A${r} ${r} 0 1 1 ${cx + r} ${cy}A${r} ${r} 0 1 1 ${cx - r} ${cy}M${cx - ri} ${cy}A${ri} ${ri} 0 1 0 ${cx + ri} ${cy}A${ri} ${ri} 0 1 0 ${cx - ri} ${cy}Z`
+        : `M${x1} ${y1}A${r} ${r} 0 ${grande} 1 ${x2} ${y2}L${x3} ${y3}A${ri} ${ri} 0 ${grande} 0 ${x4} ${y4}Z`;
+
+    const porcion = svg('path', {
+      d,
+      fill: color,
+      class: 'torta-porcion' + (selected === i ? ' is-selected' : '') + (onSelect ? ' is-clickable' : ''),
+      'fill-rule': 'evenodd',
+    });
+    attachTip(porcion, `${item.label}: ${format(item.value)} · ${((item.value / total) * 100).toFixed(1).replace('.', ',')}%`);
+    if (onSelect) porcion.addEventListener('click', () => onSelect(items.indexOf(item), item));
+    plot.append(porcion);
+    desde = hasta;
+  });
+
+  plot.append(
+    svg('text', { x: cx, y: cy - 2, class: 'torta-total', 'text-anchor': 'middle' }, [document.createTextNode(format(total))])
+  );
+  plot.append(
+    svg('text', { x: cx, y: cy + 14, class: 'torta-total-pie', 'text-anchor': 'middle' }, [
+      document.createTextNode(`${partes.length} ${partes.length === 1 ? 'ítem' : 'ítems'}`),
+    ])
+  );
+
+  // La lista al costado es la que se lee de verdad: color, nombre, importe y porcentaje
+  const lista = el(
+    'div',
+    { class: 'torta-lista' },
+    partes.map((item, i) =>
+      el(
+        'button',
+        {
+          class: 'torta-item' + (selected === i ? ' is-selected' : ''),
+          type: 'button',
+          onclick: onSelect ? () => onSelect(items.indexOf(item), item) : null,
+          disabled: onSelect ? null : true,
+        },
+        [
+          el('span', { class: 'torta-punto', style: `background:${TORTA_COLORES[i % TORTA_COLORES.length]}` }),
+          el('span', { class: 'torta-nombre', text: item.label }),
+          el('span', { class: 'torta-valor', text: format(item.value) }),
+          el('span', { class: 'torta-pct', text: `${((item.value / total) * 100).toFixed(1).replace('.', ',')}%` }),
+        ]
+      )
+    )
+  );
+
+  return chartFrame({ title, note, plot: el('div', { class: 'torta-caja' }, [plot, lista]) });
+}
+
 /** Fila de números sueltos: lo que no necesita gráfico. */
 function statRow(stats) {
   return el(

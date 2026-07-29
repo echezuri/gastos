@@ -852,6 +852,114 @@ tfoot .col-label {
   padding: 0 16px 16px;
 }
 
+/* ---------- torta ---------- */
+
+/* El anillo y su lista, lado a lado en pantalla grande y uno abajo del otro en el
+   teléfono: la lista es la que se lee, el anillo da la proporción de un vistazo. */
+.torta-caja {
+  display: grid;
+  grid-template-columns: minmax(150px, 210px) 1fr;
+  gap: 14px;
+  align-items: center;
+}
+
+@media (max-width: 700px) {
+  .torta-caja {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+}
+
+.torta-total {
+  fill: var(--ink);
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.torta-total-pie {
+  fill: var(--ink-soft);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.torta-porcion {
+  transition: opacity 0.12s ease;
+  stroke: var(--panel);
+  stroke-width: 1.5;
+}
+
+.torta-porcion.is-clickable {
+  cursor: pointer;
+}
+
+.torta-porcion.is-clickable:hover {
+  opacity: 0.82;
+}
+
+.torta-porcion.is-selected {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+
+.torta-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.torta-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px;
+  align-items: baseline;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
+.torta-item:not(:disabled) {
+  cursor: pointer;
+}
+
+.torta-item:not(:disabled):hover,
+.torta-item.is-selected {
+  background: var(--accent-soft);
+}
+
+.torta-punto {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  align-self: center;
+}
+
+.torta-nombre {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.torta-valor {
+  font-weight: 600;
+}
+
+.torta-pct {
+  color: var(--ink-soft);
+  min-width: 44px;
+  text-align: right;
+}
+
 /* ---------- ranking en barras acostadas ---------- */
 
 .bar-label {

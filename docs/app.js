@@ -414,7 +414,7 @@ function renderDesglose() {
   );
 
   const graficos = [
-    chartBars({
+    chartTorta({
       items: categorias.map((c) => ({ label: c.name, value: c.total })),
       width: 470,
       title: `Gasto por categoría · ${state.year}`,
@@ -439,7 +439,7 @@ function renderDesglose() {
     if (Math.round(enGrilla) !== 0) subs.push({ label: 'Cargado en la grilla', value: enGrilla });
 
     graficos.push(
-      chartBars({
+      chartTorta({
         items: subs.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
         width: 470,
         title: `${foco.name} por subcategoría`,
@@ -660,12 +660,12 @@ function renderGraficosDeSeccion(key, title) {
 
   if (delMes.length) {
     graficos.push(
-      chartBars({
+      chartTorta({
         items: delMes.map((c) => ({ label: c.nombre, value: c.valor })),
         width: 470,
         title: `${MONTHS[mes]} · ${money(totalMes)}`,
         note: 'clic en una para abrir sus subcategorías',
-        format: (v) => `${money(v)} · ${parte(v)}`,
+        format: money,
         selected: abierta ? delMes.indexOf(abierta) : null,
         onSelect: (i) => {
           const igual = abierta && abierta.nombre === delMes[i].nombre;
@@ -684,12 +684,12 @@ function renderGraficosDeSeccion(key, title) {
     const enGrilla = abierta.valor - subs.reduce((t, s) => t + s.value, 0);
     if (Math.round(enGrilla) !== 0) subs.push({ label: 'Cargado en la grilla', value: enGrilla });
     graficos.push(
-      chartBars({
+      chartTorta({
         items: subs.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
         width: 470,
         title: `${abierta.nombre} · ${MONTHS[mes]}`,
         note: 'sobre el total de la categoría en el mes',
-        format: (v) => `${money(v)} · ${abierta.valor ? `${((v / abierta.valor) * 100).toFixed(1).replace('.', ',')}%` : '–'}`,
+        format: money,
       })
     );
   }
