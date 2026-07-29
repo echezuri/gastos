@@ -833,6 +833,25 @@ tfoot .col-label {
   font-size: 11.5px;
 }
 
+/* Los gráficos van debajo de la tabla, separados por una línea para que se lea como otro
+   bloque y no como la continuación de los números. */
+.graficos-seccion {
+  border-top: 1px solid var(--line);
+  margin-top: 4px;
+}
+
+.graficos-seccion .months {
+  padding: 0 16px 10px;
+}
+
+.graficos-seccion .chart-grid {
+  padding: 0 16px 14px;
+}
+
+.graficos-seccion .empty {
+  padding: 0 16px 16px;
+}
+
 /* ---------- ranking en barras acostadas ---------- */
 
 .bar-label {

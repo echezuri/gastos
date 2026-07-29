@@ -2,7 +2,7 @@
 // Los datos NO se cachean (siempre se piden al servidor); lo que se guarda offline es
 // la carga de movimientos, y eso lo maneja la página con su propia cola.
 // Rutas relativas: la app puede estar en una subcarpeta (GitHub Pages)
-const VERSION = 'gastos-ms62bj6s';
+const VERSION = 'gastos-ms632yo4';
 const SHELL = [
   './',
   'index.html',

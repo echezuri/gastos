@@ -94,6 +94,7 @@ const state = {
   filter: null, // { section, category } cuando mirás el detalle de una celda
   revision: null, // el informe de saneamiento; se pide sólo al abrir la solapa
   desglose: null, // { section, name } de la categoría abierta en el ranking del resumen
+  mesGrafico: null, // el mes que miran los gráficos; sin elegir, el que está corriendo
 };
 
 // ---------------------------------------------------------------- utilidades
@@ -132,6 +133,16 @@ function parseNumber(text) {
   else if (/^-?\d{1,3}(\.\d{3})+$/.test(raw)) normalized = raw.replace(/\./g, '');
   const n = Number(normalized);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Una sola puerta para todo lo que borra.
+ *
+ * Estando en el teléfono, el dedo pega donde no quiere. Nada se borra sin pasar por acá,
+ * y el texto dice qué se va, no un "¿estás seguro?" que uno acepta sin leer.
+ */
+function confirmarBorrado(que) {
+  return confirm(`¿Borrar ${que}?\n\nEsto no se puede deshacer.`);
 }
 
 function toast(message, isError = false) {
@@ -599,10 +610,122 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
         ]),
       ]),
     ]),
+    renderGraficosDeSeccion(key, title),
   ]);
 }
 
-/** Los números de una sección. Los gráficos están todos en Resumen. */
+/**
+ * Los gráficos que van debajo de la tabla de cada sección.
+ *
+ * Arriba, el reparto del mes que elijas: cuánto se llevó cada categoría y qué parte del
+ * total es. Al tocar una, se abre en sus subcategorías. Abajo, el año entero, para ver si
+ * el mes que estás mirando fue raro o es lo de siempre.
+ *
+ * El porcentaje es sobre el total de la sección en ese mes, que es la pregunta real:
+ * "de lo que gasté en variables este mes, ¿qué parte fue comida?".
+ */
+function renderGraficosDeSeccion(key, title) {
+  const cats = categoriesOf(key);
+  const mes = state.mesGrafico ?? mesEnCurso();
+  const delMes = cats
+    .map((c) => ({ nombre: c.name, valor: c.months[mes] || 0, subs: (c.subsMes || {})[mes] || {} }))
+    .filter((c) => c.valor !== 0)
+    .sort((a, b) => Math.abs(b.valor) - Math.abs(a.valor));
+
+  const totalMes = delMes.reduce((t, c) => t + c.valor, 0);
+  const parte = (v) => (totalMes ? `${((v / totalMes) * 100).toFixed(1).replace('.', ',')}%` : '–');
+
+  // Un mes por chip, como en Movimientos: en el teléfono se toca mejor que un desplegable
+  const selector = el(
+    'div',
+    { class: 'months' },
+    MONTHS.map((etiqueta, i) =>
+      el(
+        'button',
+        {
+          class: 'month-chip' + (i === mes ? ' is-active' : ''),
+          onclick: () => {
+            state.mesGrafico = i;
+            state.desglose = null;
+            renderYear();
+          },
+        },
+        [el('span', { text: etiqueta })]
+      )
+    )
+  );
+
+  const abierta = delMes.find((c) => state.desglose && state.desglose.section === key && state.desglose.name === c.nombre);
+  const graficos = [];
+
+  if (delMes.length) {
+    graficos.push(
+      chartBars({
+        items: delMes.map((c) => ({ label: c.nombre, value: c.valor })),
+        width: 470,
+        title: `${MONTHS[mes]} · ${money(totalMes)}`,
+        note: 'clic en una para abrir sus subcategorías',
+        format: (v) => `${money(v)} · ${parte(v)}`,
+        selected: abierta ? delMes.indexOf(abierta) : null,
+        onSelect: (i) => {
+          const igual = abierta && abierta.nombre === delMes[i].nombre;
+          state.desglose = igual ? null : { section: key, name: delMes[i].nombre };
+          renderYear();
+        },
+      })
+    );
+  }
+
+  if (abierta) {
+    const subs = Object.keys(abierta.subs)
+      .map((n) => ({ label: n, value: abierta.subs[n] }))
+      .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+    // Lo cargado a mano en la grilla no salió de un movimiento: no tiene subcategoría
+    const enGrilla = abierta.valor - subs.reduce((t, s) => t + s.value, 0);
+    if (Math.round(enGrilla) !== 0) subs.push({ label: 'Cargado en la grilla', value: enGrilla });
+    graficos.push(
+      chartBars({
+        items: subs.sort((a, b) => Math.abs(b.value) - Math.abs(a.value)),
+        width: 470,
+        title: `${abierta.nombre} · ${MONTHS[mes]}`,
+        note: 'sobre el total de la categoría en el mes',
+        format: (v) => `${money(v)} · ${abierta.valor ? `${((v / abierta.valor) * 100).toFixed(1).replace('.', ',')}%` : '–'}`,
+      })
+    );
+  }
+
+  const porMes = sectionTotals(key);
+  const color = key === 'ingresos' ? CHART_COLORS.income : key === 'ahorro' ? CHART_COLORS.neutral : CHART_COLORS.expense;
+
+  return el('div', { class: 'graficos-seccion' }, [
+    el('div', { class: 'panel-head' }, [
+      el('h2', { text: `En qué se fue` }),
+      el('span', { class: 'hint', text: 'elegí el mes' }),
+    ]),
+    selector,
+    graficos.length
+      ? el('div', { class: 'chart-grid' }, graficos)
+      : el('p', { class: 'empty', text: `No hay ${title.toLowerCase()} cargados en ${MONTHS[mes]}.` }),
+    el('div', { class: 'chart-grid' }, [
+      chartColumns({
+        labels: MONTHS,
+        series: [{ name: title, color, values: porMes }],
+        width: 940,
+        height: 210,
+        selected: mes,
+        onSelect: (i) => {
+          state.mesGrafico = i;
+          state.desglose = null;
+          renderYear();
+        },
+        title: `Todo el año · ${state.year}`,
+        note: 'clic en una barra para ver ese mes arriba',
+      }),
+    ]),
+  ]);
+}
+
+/** Los números de una sección. */
 function sectionInsights(key, title) {
   const cats = categoriesOf(key);
   const totals = sectionTotals(key);
@@ -804,9 +927,12 @@ function renderPending() {
         el('button', {
           class: 'icon-btn danger',
           text: '✕',
-          title: 'Borrar',
+          title: 'Borrar este gasto',
           onclick: async () => {
+            const que = `${money(mov.amount)}${mov.subcategory ? ` · ${mov.subcategory}` : ''}`;
+            if (!confirmarBorrado(`el gasto de ${que}`)) return;
             await apiMutar('DELETE', `/api/movements/${mov.id}`);
+            toast('Borrado');
           },
         }),
       ]),
@@ -1282,9 +1408,12 @@ function renderMovements() {
         el('button', {
           class: 'icon-btn danger',
           text: '✕',
-          title: 'Borrar',
+          title: 'Borrar este gasto',
           onclick: async () => {
+            const que = `${money(mov.amount)}${mov.subcategory ? ` · ${mov.subcategory}` : ''}`;
+            if (!confirmarBorrado(`el gasto de ${que}`)) return;
             await apiMutar('DELETE', `/api/movements/${mov.id}`);
+            toast('Borrado');
           },
         }),
       ]),

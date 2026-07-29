@@ -81,6 +81,8 @@ function categoriaVacia(nombre) {
     // Cuánto puso cada subcategoría en el año. Sale de los movimientos pagados: lo cargado
     // a mano en la grilla es un monto suelto por mes y no tiene subcategoría.
     subs: {},
+    // Lo mismo pero mes por mes: subsMes[3] = { Pizza: 9000 }
+    subsMes: {},
   };
 }
 
@@ -148,6 +150,9 @@ function armarAnio(anio) {
         cat.moved[i] += monto;
         const sub = texto(m.subcategoria).trim() || 'Sin subcategoría';
         cat.subs[sub] = (cat.subs[sub] || 0) + monto;
+        // Y el mismo desglose mes a mes, que es lo que mira el gráfico cuando elegís uno
+        if (!cat.subsMes[i]) cat.subsMes[i] = {};
+        cat.subsMes[i][sub] = (cat.subsMes[i][sub] || 0) + monto;
       } else {
         cat.pending[i] += monto;
         pendientes.push(movimientoApp(m));
