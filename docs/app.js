@@ -286,7 +286,6 @@ function renderSummary() {
   const totals = Object.fromEntries(SECTIONS.map((s) => [s.key, sectionTotals(s.key)]));
   const gasto = MONTHS.map((_, m) => sum(SECCIONES_DE_GASTO.map((key) => totals[key][m])));
   const resto = MONTHS.map((_, m) => totals.ingresos[m] - gasto[m]);
-  const hayAhorro = sum(totals.ahorro) !== 0;
 
   const rows = [
     { label: 'Ingresos', values: totals.ingresos, tab: 'ingresos', tone: 'income', key: true },
@@ -334,6 +333,9 @@ function renderSummary() {
     ),
   ]);
 
+  // Un solo gráfico acá: ingresos contra gasto, mes a mes. El resto de lo que había
+  // (resto, por sección, ahorros) se sacó a pedido — el detalle por categoría ya está
+  // más abajo, en la torta de renderDesglose().
   const charts = el('div', { class: 'chart-grid' }, [
     chartColumns({
       labels: MONTHS,
@@ -345,38 +347,6 @@ function renderSummary() {
       title: `Ingresos y gasto mes a mes · ${state.year}`,
       note: 'la etiqueta marca el mes más alto de cada serie',
     }),
-    chartColumns({
-      labels: MONTHS,
-      series: [{ name: 'Resto', color: CHART_COLORS.income, values: resto }],
-      width: 460,
-      height: 210,
-      colorFor: (v) => (v < 0 ? CHART_COLORS.expense : CHART_COLORS.income),
-      title: 'Resto por mes',
-      note: 'ingresos − gasto',
-    }),
-    // Lo que antes estaba repartido en cada sección, junto y comparable
-    chartColumns({
-      labels: MONTHS,
-      series: SECTIONS.filter((s) => s.key !== 'ingresos' && s.key !== 'ahorro').map((s, i) => ({
-        name: s.title,
-        color: TONOS_SECCION[i % TONOS_SECCION.length],
-        values: totals[s.key],
-      })),
-      width: 940,
-      height: 210,
-      title: 'Gasto por sección',
-      note: 'fijos, tarjetas y variables mes a mes',
-    }),
-    hayAhorro
-      ? chartColumns({
-          labels: MONTHS,
-          series: [{ name: 'Ahorros', color: CHART_COLORS.neutral, values: totals.ahorro }],
-          width: 460,
-          height: 210,
-          title: 'Ahorros por mes',
-          note: 'no suman al gasto',
-        })
-      : null,
   ]);
 
   return el('section', { class: 'panel' }, [
@@ -391,9 +361,6 @@ function renderSummary() {
     renderDesglose(),
   ]);
 }
-
-// Un tono por sección de gasto, para poder compararlas en un mismo gráfico.
-const TONOS_SECCION = ['var(--chart-expense)', 'var(--chart-neutral)', 'var(--chart-warm)'];
 
 /**
  * Ranking de gasto por categoría y, al elegir una, por subcategoría.

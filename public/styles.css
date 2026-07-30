@@ -29,9 +29,6 @@
   --chart-income: #1baf7a;
   --chart-expense: #e34948;
   --chart-neutral: #2a78d6;
-  /* Tercer tono, para separar las tres secciones de gasto en un mismo gráfico. Ámbar:
-     se distingue del rojo y del azul también sin ver el color. */
-  --chart-warm: #d08c1c;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -55,7 +52,6 @@
     --chart-income: #199e70;
     --chart-expense: #e66767;
     --chart-neutral: #3987e5;
-    --chart-warm: #d99f36;
   }
 }
 
@@ -2218,12 +2214,12 @@ tr.grupo-primero:first-child td {
      Acá .scroll-x desplaza a lo ancho, y eso convierte a la caja en contenedor de scroll
      en los dos ejes: una cabecera pegajosa se ancla al borde de esa caja, que está a media
      página, y queda flotando en el medio de la tabla. */
+  /* Todos los meses miden lo mismo que el mes en curso: esa era la única columna que
+     entraba bien, el resto quedaba tan angosta que un importe de seis cifras se
+     superponía con la columna de al lado. El mes en curso se sigue destacando por
+     color (ver .mes-actual más arriba), ya no por ser el único ancho. */
   .panel thead th {
     position: static;
-    width: 62px;
-  }
-
-  .panel thead th.mes-actual {
     width: 132px;
   }
 
@@ -2231,13 +2227,18 @@ tr.grupo-primero:first-child td {
     width: 116px;
   }
 
-  .panel thead th.year-col,
-  .panel thead th.pct-col {
-    width: 74px;
+  /* El total del año es más grande que cualquier mes suelto — "$5.208.430" no entra en
+     el mismo ancho que "12,5%" — así que cada uno necesita su propia medida. */
+  .panel thead th.year-col {
+    width: 108px;
   }
 
-  .mes-actual .cell-detail,
-  .mes-actual .cell-input {
+  .panel thead th.pct-col {
+    width: 60px;
+  }
+
+  .cell-detail,
+  .cell-input {
     font-size: 15px;
   }
 
