@@ -57,7 +57,18 @@ function png(size, pixel) {
   ]);
 }
 
-/** Cuadrado redondeado con tres barras crecientes. `relleno` deja aire para el ícono "maskable". */
+/**
+ * Cuadrado redondeado con un signo "$": la misma marca que ya se ve en la barra de
+ * arriba dentro de la app (el cuadradito verde con el "$"), para que el ícono del
+ * teléfono sea lo primero que reconocés y lo que ya conocés de adentro sean la misma
+ * cosa. `margen` deja aire alrededor para el ícono "maskable" (el sistema lo recorta
+ * en círculo y no puede perder el dibujo).
+ *
+ * El signo se arma con dos anillos en forma de "C" (arriba y abajo, cada uno abierto
+ * hacia el costado por donde se conecta con el otro) más una barra vertical que los
+ * atraviesa — es como se dibuja un "$" con círculos y rectángulos, sin necesitar una
+ * fuente ni una curva a mano.
+ */
 function dibujo({ margen = 0, radio = 0.22 } = {}) {
   return (x, y, size) => {
     const m = size * margen;
@@ -71,17 +82,33 @@ function dibujo({ margen = 0, radio = 0.22 } = {}) {
     const cy = Math.min(Math.max(py, r), lado - r);
     if ((px - cx) ** 2 + (py - cy) ** 2 > r * r) return [0, 0, 0, 0];
 
-    // tres barras de distinta altura, alineadas abajo
-    const barras = [
-      { x0: 0.24, x1: 0.38, alto: 0.34 },
-      { x0: 0.43, x1: 0.57, alto: 0.55 },
-      { x0: 0.62, x1: 0.76, alto: 0.76 },
-    ];
     const fx = px / lado;
     const fy = py / lado;
-    for (const b of barras) {
-      if (fx >= b.x0 && fx <= b.x1 && fy >= 0.78 - b.alto && fy <= 0.78) return [...BARRA, 255];
-    }
+
+    // Ángulo 0 = derecha, crece en sentido horario (la "y" de la imagen crece hacia abajo)
+    const anguloDesde = (ax, ay, gx, gy) => {
+      let a = (Math.atan2(gy - ay, gx - ax) * 180) / Math.PI;
+      if (a < 0) a += 360;
+      return a;
+    };
+    const enAnillo = (ax, ay, radioExt, grosor, desde, hasta) => {
+      const d = Math.hypot(fx - ax, fy - ay);
+      if (d > radioExt || d < radioExt - grosor) return false;
+      const a = anguloDesde(ax, ay, fx, fy);
+      return desde <= hasta ? a >= desde && a <= hasta : a >= desde || a <= hasta;
+    };
+
+    const grosor = 0.1;
+    // El gancho de arriba: un anillo casi completo, con un hueco chico abajo a la
+    // derecha (30°-90°, con 0°=derecha y creciendo en sentido horario).
+    if (enAnillo(0.5, 0.32, 0.22, grosor, 90, 30)) return [...BARRA, 255];
+    // El de abajo, con el hueco arriba a la izquierda (210°-270°): el mismo dibujo
+    // dado vuelta, así las dos puntas quedan cerca de donde pasa la barra vertical.
+    if (enAnillo(0.5, 0.68, 0.22, grosor, 270, 210)) return [...BARRA, 255];
+
+    // La barra vertical: un poco más larga que los ganchos, como el trazo del signo real
+    if (fx >= 0.5 - grosor / 2 && fx <= 0.5 + grosor / 2 && fy >= 0.14 && fy <= 0.86) return [...BARRA, 255];
+
     return [...FONDO, 255];
   };
 }
