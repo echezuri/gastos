@@ -424,7 +424,7 @@ function findCategory(section, name) {
 }
 
 /** Celda editable: escribe el monto cargado a mano en la grilla. */
-function cellInput(section, category, monthIndex, value, paid, permitePago) {
+function cellInput(section, category, monthIndex, value, paid) {
   const input = el('input', {
     class: 'cell-input' + (value === null || value === undefined ? ' is-empty' : ''),
     type: 'text',
@@ -476,14 +476,19 @@ function cellInput(section, category, monthIndex, value, paid, permitePago) {
     }
   });
 
-  // Sólo tiene sentido marcar "pagado" cuando hay un monto cargado a mano: un movimiento
-  // ya tiene su propio pagado, y una celda vacía no es un gasto todavía.
-  if (!permitePago || value === null || value === undefined) return input;
+  // Sólo tiene sentido marcarlo cuando hay un monto cargado a mano: un movimiento ya
+  // tiene su propio pagado, y una celda vacía no es nada todavía.
+  if (value === null || value === undefined) return input;
+
+  // Un ingreso no se paga, se cobra. Es la misma marca y el mismo campo: cambia la
+  // palabra, que es lo único que se lee.
+  const cobro = SECTIONS.find((s) => s.key === section)?.kind === 'ingreso';
+  const hecho = cobro ? 'Cobrado' : 'Pagado';
 
   const boton = el('button', {
     class: 'pago-toggle',
     type: 'button',
-    title: paid ? 'Pagado — clic para desmarcar' : 'Marcar como pagado',
+    title: paid ? `${hecho} — clic para desmarcar` : `Marcar como ${hecho.toLowerCase()}`,
     text: '✓',
     onclick: async (e) => {
       e.preventDefault();
@@ -537,10 +542,6 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
     ? [...categoriesOf(key)].sort((a, b) => sum(b.months) - sum(a.months))
     : categoriesOf(key);
 
-  // El control de pagado es para lo cargado a mano en fijos y variables: en ingresos,
-  // tarjetas y ahorro no hay nada que "pagar" mes a mes de la misma forma.
-  const permitePago = key === 'fijos' || key === 'variables';
-
   const body = el(
     'tbody',
     {},
@@ -566,7 +567,7 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
           el('td', { class: claseMes(m) }, [
             cat.moves[m] > 0
               ? cellDetail(key, cat.name, m, cat)
-              : cellInput(key, cat.name, m, cat.months[m], cat.paid?.[m], permitePago),
+              : cellInput(key, cat.name, m, cat.months[m], cat.paid?.[m]),
           ])
         ),
         amountCell(sum(cat.months), 'year-col'),

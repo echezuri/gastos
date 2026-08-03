@@ -431,33 +431,51 @@ thead .col-label {
   height: 100%;
 }
 
+/* A la izquierda y no a la derecha: el importe se alinea a la derecha, asi que esa
+   esquina es justo donde terminan los digitos. */
 .pago-toggle {
   position: absolute;
-  top: 2px;
-  right: 2px;
-  width: 15px;
-  height: 15px;
+  top: 50%;
+  left: 3px;
+  transform: translateY(-50%);
+  width: 11px;
+  height: 11px;
   border: 1px solid var(--line-strong);
   border-radius: 50%;
   background: var(--panel);
   color: transparent;
-  font-size: 10px;
-  line-height: 13px;
+  font-size: 7px;
+  line-height: 1;
   padding: 0;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.12s;
+  transition: opacity 0.12s, width 0.12s, height 0.12s;
 }
 
 .cell-pago:hover .pago-toggle,
 .pago-toggle:focus-visible {
   opacity: 1;
+  color: var(--ink-soft); /* el tilde en gris: se ve que el clic lo marca */
 }
 
+/* Pagado y en reposo: sólo un punto, como el naranja que marca lo impago. Chico a
+   proposito — ni un monto de siete cifras, que llena la columna entera, llega a
+   tocarlo. El tilde entero aparece recien al pasar el mouse, para desmarcarlo. */
 .cell-pago.is-paid .pago-toggle {
   opacity: 1;
+  width: 6px;
+  height: 6px;
+  left: 2px;
   background: var(--pos);
   border-color: var(--pos);
+  color: transparent;
+}
+
+.cell-pago.is-paid:hover .pago-toggle,
+.cell-pago.is-paid .pago-toggle:focus-visible {
+  width: 11px;
+  height: 11px;
+  left: 3px;
   color: #fff;
 }
 
