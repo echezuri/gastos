@@ -131,6 +131,15 @@ const routes = [
     },
   },
   {
+    method: 'PUT',
+    pattern: /^\/api\/cell\/paid$/,
+    handler: (_m, body) => {
+      const { year, section, category, month } = body;
+      store.setCellPaid({ year: Number(year), section, category, month: Number(month), paid: Boolean(body.paid) });
+      return { ok: true };
+    },
+  },
+  {
     method: 'POST',
     pattern: /^\/api\/category$/,
     handler: (_m, body) => {

@@ -131,6 +131,7 @@ for (const [table, column, definition] of [
   ['movements', 'currency', "TEXT NOT NULL DEFAULT 'ARS'"],
   ['movements', 'amount_currency', 'REAL'],
   ['movements', 'rate', 'REAL'],
+  ['cells', 'paid', 'INTEGER NOT NULL DEFAULT 0'],
 ]) {
   const columns = db.prepare(`PRAGMA table_info(${table})`).all();
   if (columns.length && !columns.some((c) => c.name === column)) {
@@ -178,7 +179,7 @@ const q = {
   categories: db.prepare(
     'SELECT section, name, position FROM categories WHERE year = ? ORDER BY section, position, id'
   ),
-  cells: db.prepare('SELECT section, category, month, amount FROM cells WHERE year = ?'),
+  cells: db.prepare('SELECT section, category, month, amount, paid FROM cells WHERE year = ?'),
   movementsOfYear: db.prepare('SELECT * FROM movements WHERE year = ? ORDER BY month, day, id'),
   movementsOfCell: db.prepare(`
     SELECT * FROM movements
@@ -211,6 +212,9 @@ const q = {
   `),
   deleteCell: db.prepare(
     'DELETE FROM cells WHERE year = ? AND section = ? AND category = ? AND month = ?'
+  ),
+  setCellPaid: db.prepare(
+    'UPDATE cells SET paid = ? WHERE year = ? AND section = ? AND category = ? AND month = ?'
   ),
   insertCategory: db.prepare(`
     INSERT INTO categories (year, section, name, position) VALUES (?, ?, ?, ?)
@@ -264,6 +268,7 @@ function emptyCategory(name) {
     name,
     months: Array(12).fill(null), // base + movimientos pagados (lo que se muestra)
     base: Array(12).fill(null), // cargado a mano en la grilla
+    paid: Array(12).fill(false), // si lo cargado a mano ya está pagado
     moves: Array(12).fill(0), // cantidad de movimientos
     moved: Array(12).fill(0), // suma de los movimientos pagados
     pending: Array(12).fill(0), // suma de lo no pagado
@@ -304,6 +309,7 @@ function getYear(year) {
   for (const cell of q.cells.all(year)) {
     const cat = get(cell.section, cell.category);
     cat.base[cell.month - 1] = cell.amount;
+    cat.paid[cell.month - 1] = Boolean(cell.paid);
   }
 
   const pendingList = [];
@@ -393,6 +399,12 @@ function setCell({ year, section, category, month, amount }) {
   } else {
     q.upsertCell.run(year, section, category, month, Number(amount));
   }
+}
+
+/** Marca como pagado (o no) el monto cargado a mano en la grilla, sin tocar el importe. */
+function setCellPaid({ year, section, category, month, paid }) {
+  const info = q.setCellPaid.run(paid ? 1 : 0, year, section, category, month);
+  if (info.changes === 0) throw new Error('Esa celda no tiene monto cargado');
 }
 
 function ensureCategory({ year, section, name }) {
@@ -615,6 +627,7 @@ module.exports = {
   getVehicles,
   getQuinta,
   setCell,
+  setCellPaid,
   ensureCategory,
   renameCategory,
   deleteCategory,

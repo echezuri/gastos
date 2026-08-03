@@ -423,6 +423,48 @@ thead .col-label {
   background: var(--accent-soft);
 }
 
+/* El tilde de "pagado" vive flotando sobre la celda y sólo aparece al pasar el mouse,
+   igual que .row-actions con los botones de categoría: así no compite por espacio con
+   el importe, que necesita todo el ancho para no truncarse. */
+.cell-pago {
+  position: relative;
+  height: 100%;
+}
+
+.pago-toggle {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 15px;
+  height: 15px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  color: transparent;
+  font-size: 10px;
+  line-height: 13px;
+  padding: 0;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.cell-pago:hover .pago-toggle,
+.pago-toggle:focus-visible {
+  opacity: 1;
+}
+
+.cell-pago.is-paid .pago-toggle {
+  opacity: 1;
+  background: var(--pos);
+  border-color: var(--pos);
+  color: #fff;
+}
+
+.cell-pago.is-paid .cell-input {
+  color: var(--pos);
+}
+
 .label-cell {
   display: flex;
   align-items: center;

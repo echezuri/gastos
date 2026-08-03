@@ -424,7 +424,7 @@ function findCategory(section, name) {
 }
 
 /** Celda editable: escribe el monto cargado a mano en la grilla. */
-function cellInput(section, category, monthIndex, value) {
+function cellInput(section, category, monthIndex, value, paid, permitePago) {
   const input = el('input', {
     class: 'cell-input' + (value === null || value === undefined ? ' is-empty' : ''),
     type: 'text',
@@ -476,7 +476,32 @@ function cellInput(section, category, monthIndex, value) {
     }
   });
 
-  return input;
+  // Sólo tiene sentido marcar "pagado" cuando hay un monto cargado a mano: un movimiento
+  // ya tiene su propio pagado, y una celda vacía no es un gasto todavía.
+  if (!permitePago || value === null || value === undefined) return input;
+
+  const boton = el('button', {
+    class: 'pago-toggle',
+    type: 'button',
+    title: paid ? 'Pagado — clic para desmarcar' : 'Marcar como pagado',
+    text: '✓',
+    onclick: async (e) => {
+      e.preventDefault();
+      try {
+        await apiMutar('PUT', '/api/cell/paid', {
+          year: state.year,
+          section,
+          category,
+          month: monthIndex + 1,
+          paid: !paid,
+        });
+      } catch (err) {
+        toast(err.message, true);
+      }
+    },
+  });
+
+  return el('div', { class: 'cell-pago' + (paid ? ' is-paid' : '') }, [input, boton]);
 }
 
 /** Celda con movimientos: muestra el total y abre el detalle. */
@@ -512,6 +537,10 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
     ? [...categoriesOf(key)].sort((a, b) => sum(b.months) - sum(a.months))
     : categoriesOf(key);
 
+  // El control de pagado es para lo cargado a mano en fijos y variables: en ingresos,
+  // tarjetas y ahorro no hay nada que "pagar" mes a mes de la misma forma.
+  const permitePago = key === 'fijos' || key === 'variables';
+
   const body = el(
     'tbody',
     {},
@@ -535,7 +564,9 @@ function renderSection({ key, title, hint, ordenarPorMonto }) {
         ]),
         ...MONTHS.map((_, m) =>
           el('td', { class: claseMes(m) }, [
-            cat.moves[m] > 0 ? cellDetail(key, cat.name, m, cat) : cellInput(key, cat.name, m, cat.months[m]),
+            cat.moves[m] > 0
+              ? cellDetail(key, cat.name, m, cat)
+              : cellInput(key, cat.name, m, cat.months[m], cat.paid?.[m], permitePago),
           ])
         ),
         amountCell(sum(cat.months), 'year-col'),

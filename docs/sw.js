@@ -2,7 +2,7 @@
 // Los datos NO se cachean (siempre se piden al servidor); lo que se guarda offline es
 // la carga de movimientos, y eso lo maneja la página con su propia cola.
 // Rutas relativas: la app puede estar en una subcarpeta (GitHub Pages)
-const VERSION = 'gastos-ms6skms3'; // ícono nuevo: fuerza a soltar la caché vieja
+const VERSION = 'gastos-msdogbol'; // ícono nuevo: fuerza a soltar la caché vieja
 const SHELL = [
   './',
   'index.html',

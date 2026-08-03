@@ -74,6 +74,9 @@ function categoriaVacia(nombre) {
     name: nombre,
     months: meses(),
     base: meses(),
+    // Si lo cargado a mano en la grilla ya está pagado. Sólo tiene sentido cuando hay un
+    // monto (base no es null); un movimiento ya tiene su propio pagado.
+    paid: [false, false, false, false, false, false, false, false, false, false, false, false],
     moves: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     moved: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
     pending: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -122,6 +125,7 @@ function armarAnio(anio) {
     .forEach(function (c) {
       const cat = obtener(texto(c.seccion), texto(c.categoria));
       cat.base[Number(c.mes) - 1] = numero(c.monto);
+      cat.paid[Number(c.mes) - 1] = bool(c.pagado);
     });
 
   // Las categorías que existen de verdad. Un movimiento puede nombrar una que ya no está:
@@ -431,6 +435,16 @@ function ponerCelda(anio, seccion, categoria, mes, monto) {
   }
   if (actual) actualizar('celdas', actual.id, { monto: Number(monto) });
   else insertar('celdas', { anio: Number(anio), seccion: seccion, categoria: categoria, mes: Number(mes), monto: Number(monto) });
+}
+
+/** Marca como pagado (o no) el monto cargado a mano en la grilla, sin tocar el importe. */
+function marcarCeldaPagada(anio, seccion, categoria, mes, pagado) {
+  const actual = leer('celdas').filter(function (c) {
+    return Number(c.anio) === Number(anio) && texto(c.seccion) === seccion &&
+      texto(c.categoria) === categoria && Number(c.mes) === Number(mes);
+  })[0];
+  if (!actual) throw new Error('Esa celda no tiene monto cargado');
+  actualizar('celdas', actual.id, { pagado: bool(pagado) });
 }
 
 // ---------------------------------------------------------------- saneamiento
@@ -842,6 +856,11 @@ function despachar(metodo, ruta, cuerpo) {
 
   if (camino === '/api/cell' && metodo === 'PUT') {
     ponerCelda(cuerpo.year, cuerpo.section, cuerpo.category, cuerpo.month, cuerpo.amount);
+    return { ok: true };
+  }
+
+  if (camino === '/api/cell/paid' && metodo === 'PUT') {
+    marcarCeldaPagada(cuerpo.year, cuerpo.section, cuerpo.category, cuerpo.month, cuerpo.paid);
     return { ok: true };
   }
 
