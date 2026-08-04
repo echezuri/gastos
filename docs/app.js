@@ -1829,10 +1829,12 @@ const form = {
  * falta un "más opciones" que abrir.
  */
 function buildForm() {
-  const amount = el('input', { id: 'f-amount', class: 'field-input', type: 'text', inputmode: 'decimal', placeholder: '0', autocomplete: 'off' });
+  const amount = el('input', { id: 'f-amount', class: 'field-input', type: 'text', inputmode: 'decimal', placeholder: '0', autocomplete: 'off', autofocus: true });
+  // Sin el símbolo: la moneda al lado del monto tiene que ocupar lo mínimo para que en el
+  // teléfono el importe entre entero.
   const moneda = el('select', { id: 'f-moneda', class: 'field-input campo-moneda' }, [
-    el('option', { value: 'ARS', text: '$ ARS' }),
-    el('option', { value: 'USD', text: 'US$ USD' }),
+    el('option', { value: 'ARS', text: 'ARS' }),
+    el('option', { value: 'USD', text: 'USD' }),
   ]);
   const cotizacion = el('input', { id: 'f-rate', class: 'field-input', type: 'text', inputmode: 'decimal', placeholder: 'cotización' });
   const date = el('input', { id: 'f-date', class: 'field-input', type: 'date' });
@@ -1955,7 +1957,27 @@ function openForm(kind = 'gasto') {
   dialog.querySelector('#f-rate').value = '';
   setFormMoneda('ARS');
   dialog.showModal();
-  dialog.querySelector('#f-amount').focus();
+  enfocarMonto();
+}
+
+/**
+ * Deja el cursor en el monto con el teclado numérico arriba.
+ *
+ * En el teléfono la app arranca directamente en este formulario (`start_url` termina en
+ * `?cargar=1`), así que lo primero que hace falta es escribir el importe. El focus va
+ * después de que el diálogo esté dibujado, y a Chrome hay que pedirle el teclado aparte:
+ * con `focus()` solo no siempre lo levanta cuando nadie tocó la pantalla todavía.
+ */
+function enfocarMonto() {
+  const amount = form.dialog.querySelector('#f-amount');
+  requestAnimationFrame(() => {
+    amount.focus({ preventScroll: true });
+    try {
+      navigator.virtualKeyboard?.show();
+    } catch {
+      /* el navegador decide; si no quiere, el usuario toca el campo */
+    }
+  });
 }
 
 async function submitForm(event, keepOpen) {

@@ -1699,11 +1699,13 @@ tr.grupo-primero:first-child td {
   min-width: 0;
 }
 
+/* Angosto a propósito: cada píxel que se lleva la moneda es un dígito menos que entra en
+   el monto. */
 .campo-moneda {
   flex: none;
-  width: 88px;
+  width: 68px;
   padding-left: 8px;
-  padding-right: 6px;
+  padding-right: 4px;
   font-size: 13.5px;
 }
 
@@ -2324,12 +2326,30 @@ tr.grupo-primero:first-child td {
     max-height: 100dvh;
     margin: auto 0 0;
     border-radius: 16px 16px 0 0;
-    padding: 18px 16px calc(18px + env(safe-area-inset-bottom));
+    padding: 18px 12px calc(18px + env(safe-area-inset-bottom));
   }
 
+  /* En 375px de ancho el monto se quedaba con 83px: no entraban ni cuatro cifras. La
+     fecha y la moneda pasan a ocupar lo justo, y el importe se queda con el resto. */
   #f-amount {
-    font-size: 28px;
-    padding: 12px;
+    font-size: 26px;
+    padding: 12px 8px;
+  }
+
+  .campo-monto-fecha {
+    gap: 10px;
+  }
+
+  /* Lo mínimo para que se lea la fecha entera con su iconito de calendario. */
+  .campo-fecha {
+    width: 136px;
+  }
+
+  .campo-moneda {
+    width: 62px;
+    font-size: 15px;
+    padding-left: 6px;
+    padding-right: 2px;
   }
 
   .field-input {
